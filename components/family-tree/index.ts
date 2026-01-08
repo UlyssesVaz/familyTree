@@ -11,5 +11,6 @@ export { AddRelativeOrStoryModal } from './AddRelativeOrStoryModal';
 export { AddRelativeTypeModal } from './AddRelativeTypeModal';
 export { AddPersonModal } from './AddPersonModal';
 export { InfiniteCanvas } from './InfiniteCanvas';
+export { DatePickerField } from './DatePickerField';
 export type { RelativeType } from './AddRelativeTypeModal';
 

@@ -8,6 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { DatePickerField } from './DatePickerField';
 import type { Gender, Person, RelativeType } from '@/types/family-tree';
 
 interface AddPersonModalProps {
@@ -203,18 +204,13 @@ export function AddPersonModal({
             </View>
 
             {/* Birth Date Field */}
-            <View style={styles.field}>
-              <ThemedText type="defaultSemiBold" style={styles.label}>
-                Birth Date
-              </ThemedText>
-              <TextInput
-                style={[styles.input, { color: colors.text, borderColor: colors.icon }]}
-                placeholder="YYYY-MM-DD (e.g., 1990-01-15)"
-                placeholderTextColor={colors.icon}
-                value={birthDate}
-                onChangeText={setBirthDate}
-              />
-            </View>
+            <DatePickerField
+              label="Birth Date"
+              value={birthDate}
+              onChange={setBirthDate}
+              placeholder="Select birth date"
+              hint="Format: YYYY-MM-DD (e.g., 1990-01-15)"
+            />
 
             {/* Phone Number Field */}
             <View style={styles.field}>
@@ -424,4 +420,3 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
 });
-

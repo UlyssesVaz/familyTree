@@ -10,6 +10,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { formatMentions } from '@/utils/format-mentions';
 import type { Update, Person } from '@/types/family-tree';
 
 export default function ExploreScreen() {
@@ -27,6 +28,7 @@ export default function ExploreScreen() {
   const ego = useFamilyTreeStore((state) => state.getEgo());
   const egoId = useFamilyTreeStore((state) => state.egoId);
   const people = useFamilyTreeStore((state) => state.people);
+  const peopleArray = Array.from(people.values());
   const updatesMap = useFamilyTreeStore((state) => state.updates);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
   const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
@@ -256,7 +258,7 @@ export default function ExploreScreen() {
                               style={styles.updateCaption}
                               numberOfLines={isExpanded ? undefined : 3}
                             >
-                              {update.caption}
+                              {formatMentions(update.caption, undefined, peopleArray)}
                             </ThemedText>
                             {update.caption.length > 100 && (
                               <Pressable

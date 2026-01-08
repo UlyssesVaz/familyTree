@@ -8,6 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { DatePickerField } from './DatePickerField';
 import type { Gender, Person } from '@/types/family-tree';
 
 interface EditProfileModalProps {
@@ -217,26 +218,13 @@ export function EditProfileModal({ person, visible, onClose, onSave }: EditProfi
             />
           </View>
 
-          <View style={styles.field}>
-            <ThemedText style={styles.label}>Birth Date</ThemedText>
-            <TextInput
-              style={[
-                styles.input,
-                {
-                  color: colors.text,
-                  borderColor: colors.icon,
-                  backgroundColor: colors.background,
-                },
-              ]}
-              value={birthDate}
-              onChangeText={setBirthDate}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor={colors.icon}
-            />
-            <ThemedText style={styles.hint}>
-              Format: YYYY-MM-DD (e.g., 2000-01-15)
-            </ThemedText>
-          </View>
+          <DatePickerField
+            label="Birth Date"
+            value={birthDate}
+            onChange={setBirthDate}
+            placeholder="Select birth date"
+            hint="Format: YYYY-MM-DD (e.g., 2000-01-15)"
+          />
         </ScrollView>
       </ThemedView>
     </Modal>

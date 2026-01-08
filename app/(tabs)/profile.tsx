@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, TouchableOpacity, View, Modal, Alert
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useLocalSearchParams } from 'expo-router';
 
 import { AddUpdateModal, EditProfileModal } from '@/components/family-tree';
 import { useColorSchemeContext } from '@/contexts/color-scheme-context';
@@ -11,10 +12,12 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { formatMentions } from '@/utils/format-mentions';
 import type { Gender, Update, Person } from '@/types/family-tree';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ addUpdate?: string }>();
   const [isEditing, setIsEditing] = useState(false);
   const [isAddingUpdate, setIsAddingUpdate] = useState(false);
   const [updateToEdit, setUpdateToEdit] = useState<Update | null>(null);
@@ -40,9 +43,12 @@ export default function ProfileScreen() {
   const deleteUpdate = useFamilyTreeStore((state) => state.deleteUpdate);
   const updateUpdate = useFamilyTreeStore((state) => state.updateUpdate);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
+  const toggleTaggedUpdateVisibility = useFamilyTreeStore((state) => state.toggleTaggedUpdateVisibility);
   
   // Subscribe to updates Map directly so component re-renders when it changes
   const updatesMap = useFamilyTreeStore((state) => state.updates);
+  const people = useFamilyTreeStore((state) => state.people);
+  const peopleArray = Array.from(people.values());
   
   // Calculate derived values that depend on updates
   const getUpdateCount = useFamilyTreeStore((state) => state.getUpdateCount);
@@ -58,6 +64,13 @@ export default function ProfileScreen() {
     const newScheme = colorScheme === 'dark' ? 'light' : 'dark';
     setColorScheme(newScheme);
   };
+
+  // Check if we should open Add Update modal from navigation params
+  useEffect(() => {
+    if (params.addUpdate === 'true') {
+      setIsAddingUpdate(true);
+    }
+  }, [params.addUpdate]);
 
   // Show delete alert after menu modal closes
   // Using ref and delay to avoid iOS Alert timing issues
@@ -154,7 +167,6 @@ export default function ProfileScreen() {
   const descendantsCount = person ? countDescendants(person.id) : 0;
   const updatesCount = person ? getUpdateCount(person.id) : 0;
   const updates = person ? getUpdatesForPerson(person.id) : [];
-  // #region agent log
   useEffect(() => {
     try {
       if (typeof fetch !== 'undefined') {
@@ -296,6 +308,8 @@ export default function ProfileScreen() {
                 });
                 const isExpanded = expandedUpdateId === update.id;
                 const showMenu = menuUpdateId === update.id;
+                const isTaggedUpdate = update.taggedPersonIds?.includes(person?.id || '') && update.personId !== person?.id;
+                const isOwnUpdate = update.personId === person?.id;
 
                 return (
                   <View key={update.id} style={styles.updateCardWrapper}>
@@ -310,19 +324,42 @@ export default function ProfileScreen() {
                       {/* Card Header */}
                       <View style={styles.updateCardHeader}>
                         <View style={styles.updateCardTitleSection}>
-                          <ThemedText type="defaultSemiBold" style={styles.updateTitle}>
-                            {update.title}
-                          </ThemedText>
-                          <ThemedText style={[styles.updateDate, { color: colors.icon, opacity: 0.7 }]}>
-                            {formattedDate}
-                          </ThemedText>
+                          <View style={styles.updateTitleRow}>
+                            <ThemedText type="defaultSemiBold" style={styles.updateTitle}>
+                              {update.title}
+                            </ThemedText>
+                            {isTaggedUpdate && (
+                              <View style={[styles.taggedBadge, { backgroundColor: colors.tint + '20' }]}>
+                                <MaterialIcons name="person" size={12} color={colors.tint} />
+                                <ThemedText style={[styles.taggedBadgeText, { color: colors.tint }]}>
+                                  Tagged
+                                </ThemedText>
+                              </View>
+                            )}
+                          </View>
+                          <View style={styles.updateMetaRow}>
+                            {isTaggedUpdate && (
+                              <ThemedText style={[styles.updateAuthor, { color: colors.icon, opacity: 0.7 }]}>
+                                {(() => {
+                                  const author = getPerson(update.personId);
+                                  return author ? `by ${author.name}` : '';
+                                })()}
+                              </ThemedText>
+                            )}
+                            <ThemedText style={[styles.updateDate, { color: colors.icon, opacity: 0.7 }]}>
+                              {formattedDate}
+                            </ThemedText>
+                          </View>
                         </View>
-                        <Pressable
-                          onPress={() => setMenuUpdateId(update.id)}
-                          style={styles.menuButton}
-                        >
-                          <MaterialIcons name="more-vert" size={20} color={colors.icon} />
-                        </Pressable>
+                        {/* Menu button - only show for own updates or tagged updates (for hide/show) */}
+                        {(isOwnUpdate || isTaggedUpdate) && (
+                          <Pressable
+                            onPress={() => setMenuUpdateId(update.id)}
+                            style={styles.menuButton}
+                          >
+                            <MaterialIcons name="more-vert" size={20} color={colors.icon} />
+                          </Pressable>
+                        )}
                       </View>
 
                       {/* Photo - in DOM, not affected by theme */}
@@ -364,7 +401,7 @@ export default function ProfileScreen() {
                             style={styles.updateCaption}
                             numberOfLines={isExpanded ? undefined : 1}
                           >
-                            {update.caption}
+                            {formatMentions(update.caption, undefined, peopleArray)}
                           </ThemedText>
                           {update.caption.length > 50 && (
                             <Pressable
@@ -401,62 +438,94 @@ export default function ProfileScreen() {
                               e.stopPropagation();
                             }}
                           >
-                            <Pressable
-                              onPress={(e) => {
-                                // #region agent log
-                                fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:333',message:'Privacy toggle pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                // #endregion
-                                e.stopPropagation();
-                                toggleUpdatePrivacy(update.id);
-                                setMenuUpdateId(null);
-                              }}
-                              style={styles.menuItem}
-                            >
-                              <MaterialIcons
-                                name={update.isPublic ? 'lock' : 'lock-open'}
-                                size={20}
-                                color={colors.text}
-                              />
-                              <ThemedText style={styles.menuItemText}>
-                                Make {update.isPublic ? 'Private' : 'Public'}
-                              </ThemedText>
-                            </Pressable>
-                            <Pressable
-                              onPress={(e) => {
-                                // #region agent log
-                                fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:349',message:'Edit button pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                // #endregion
-                                e.stopPropagation();
-                                setUpdateToEdit(update);
-                                setMenuUpdateId(null);
-                                setIsAddingUpdate(true);
-                              }}
-                              style={styles.menuItem}
-                            >
-                              <MaterialIcons name="edit" size={20} color={colors.text} />
-                              <ThemedText style={styles.menuItemText}>Edit</ThemedText>
-                            </Pressable>
-                            <Pressable
-                              onPress={(e) => {
-                                // #region agent log
-                                fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:360',message:'Delete button pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                // #endregion
-                                e.stopPropagation();
-                                // Set pending delete and close menu
-                                // useEffect will handle showing alert after modal closes
-                                setPendingDeleteId(update.id);
-                                setMenuUpdateId(null);
-                                // #region agent log
-                                fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:366',message:'State set for delete',data:{pendingDeleteId:update.id,menuUpdateId:'null'},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                // #endregion
-                              }}
-                              style={styles.menuItem}
-                            >
-                              <MaterialIcons name="delete" size={20} color="#FF3B30" />
-                              <ThemedText style={[styles.menuItemText, { color: '#FF3B30' }]}>
-                                Delete
-                              </ThemedText>
-                            </Pressable>
+                            {/* For tagged updates, show hide/show option */}
+                            {isTaggedUpdate && (
+                              <Pressable
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  if (person?.id) {
+                                    toggleTaggedUpdateVisibility(person.id, update.id);
+                                  }
+                                  setMenuUpdateId(null);
+                                }}
+                                style={styles.menuItem}
+                              >
+                                <MaterialIcons
+                                  name={person?.hiddenTaggedUpdateIds?.includes(update.id) ? 'visibility' : 'visibility-off'}
+                                  size={20}
+                                  color={colors.text}
+                                />
+                                <ThemedText style={styles.menuItemText}>
+                                  {person?.hiddenTaggedUpdateIds?.includes(update.id) ? 'Show on Profile' : 'Hide from Profile'}
+                                </ThemedText>
+                              </Pressable>
+                            )}
+                            
+                            {/* For own updates, show privacy and edit options */}
+                            {isOwnUpdate && (
+                              <>
+                                <Pressable
+                                  onPress={(e) => {
+                                    // #region agent log
+                                    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:333',message:'Privacy toggle pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
+                                    // #endregion
+                                    e.stopPropagation();
+                                    toggleUpdatePrivacy(update.id);
+                                    setMenuUpdateId(null);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons
+                                    name={update.isPublic ? 'lock' : 'lock-open'}
+                                    size={20}
+                                    color={colors.text}
+                                  />
+                                  <ThemedText style={styles.menuItemText}>
+                                    Make {update.isPublic ? 'Private' : 'Public'}
+                                  </ThemedText>
+                                </Pressable>
+                                <Pressable
+                                  onPress={(e) => {
+                                    // #region agent log
+                                    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:349',message:'Edit button pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
+                                    // #endregion
+                                    e.stopPropagation();
+                                    setUpdateToEdit(update);
+                                    setMenuUpdateId(null);
+                                    setIsAddingUpdate(true);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons name="edit" size={20} color={colors.text} />
+                                  <ThemedText style={styles.menuItemText}>Edit</ThemedText>
+                                </Pressable>
+                              </>
+                            )}
+                            
+                            {/* Delete option - only for own updates */}
+                            {isOwnUpdate && (
+                              <Pressable
+                                onPress={(e) => {
+                                  // #region agent log
+                                  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:360',message:'Delete button pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
+                                  // #endregion
+                                  e.stopPropagation();
+                                  // Set pending delete and close menu
+                                  // useEffect will handle showing alert after modal closes
+                                  setPendingDeleteId(update.id);
+                                  setMenuUpdateId(null);
+                                  // #region agent log
+                                  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:366',message:'State set for delete',data:{pendingDeleteId:update.id,menuUpdateId:'null'},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
+                                  // #endregion
+                                }}
+                                style={styles.menuItem}
+                              >
+                                <MaterialIcons name="delete" size={20} color="#FF3B30" />
+                                <ThemedText style={[styles.menuItemText, { color: '#FF3B30' }]}>
+                                  Delete
+                                </ThemedText>
+                              </Pressable>
+                            )}
                           </Pressable>
                         </Pressable>
                       </Modal>
@@ -762,5 +831,32 @@ const styles = StyleSheet.create({
   taggedText: {
     fontSize: 13,
     opacity: 0.8,
+  },
+  updateTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  updateMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  taggedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 12,
+    gap: 4,
+  },
+  taggedBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  updateAuthor: {
+    fontSize: 12,
   },
 });

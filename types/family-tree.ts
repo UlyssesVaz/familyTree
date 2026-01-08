@@ -72,6 +72,9 @@ export interface Person {
   
   /** Version number for optimistic locking and conflict resolution */
   version: number;
+  
+  /** IDs of updates where this person is tagged but has hidden from their profile */
+  hiddenTaggedUpdateIds?: string[];
 }
 
 /**

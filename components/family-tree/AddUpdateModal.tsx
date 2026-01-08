@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View, KeyboardAvoidingView, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -9,6 +9,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { parseMentions, getMentionString } from '@/utils/mentions';
 import type { Update } from '@/types/family-tree';
 
 interface AddUpdateModalProps {
@@ -24,6 +25,8 @@ interface AddUpdateModalProps {
   onEdit?: (updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => void;
   /** Optional: Person ID - if provided, this person won't appear in tag list (they're the owner) */
   personId?: string;
+  /** Optional: Initial tagged person IDs - will auto-populate caption with mentions */
+  initialTaggedPersonIds?: string[];
 }
 
 /**
@@ -32,43 +35,58 @@ interface AddUpdateModalProps {
  * Modal for adding photos/updates to profile.
  * Can also be used for editing existing updates.
  */
-export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, personId }: AddUpdateModalProps) {
+export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, personId, initialTaggedPersonIds }: AddUpdateModalProps) {
   const colorScheme = useColorScheme();
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
 
   const isEditMode = !!updateToEdit;
   const people = useFamilyTreeStore((state) => state.people);
-  const getPerson = useFamilyTreeStore((state) => state.getPerson);
+  const peopleArray = Array.from(people.values()).filter(
+    (person) => person.id !== personId // Exclude owner from mentions
+  );
 
   const [title, setTitle] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [caption, setCaption] = useState('');
   const [isPublic, setIsPublic] = useState(true);
-  const [taggedPersonIds, setTaggedPersonIds] = useState<string[]>([]);
+  const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionPosition, setMentionPosition] = useState({ start: 0, end: 0 });
+  const captionInputRef = useRef<TextInput>(null);
 
-  // Populate form when editing
+  // Populate form when editing or when initialTaggedPersonIds is provided
   useEffect(() => {
     if (updateToEdit) {
       setTitle(updateToEdit.title);
       setPhotoUri(updateToEdit.photoUrl);
       setCaption(updateToEdit.caption || '');
       setIsPublic(updateToEdit.isPublic);
-      setTaggedPersonIds(updateToEdit.taggedPersonIds || []);
     } else {
       // Reset form when not editing
       setTitle('');
       setPhotoUri(null);
-      setCaption('');
       setIsPublic(true);
-      setTaggedPersonIds([]);
+      
+      // Auto-populate caption with mentions if initialTaggedPersonIds is provided
+      if (initialTaggedPersonIds && initialTaggedPersonIds.length > 0 && visible) {
+        const allPeople = Array.from(people.values());
+        const mentions = initialTaggedPersonIds
+          .map(id => {
+            const person = allPeople.find(p => p.id === id);
+            if (person) {
+              return `@${getMentionString(person, allPeople, personId)}`;
+            }
+            return null;
+          })
+          .filter(Boolean)
+          .join(' ');
+        setCaption(mentions ? `${mentions} ` : '');
+      } else {
+        setCaption('');
+      }
     }
-  }, [updateToEdit, visible]);
-
-  // Get all people except the owner (personId) for tagging
-  const availablePeople = Array.from(people.values()).filter(
-    (person) => person.id !== personId
-  );
+  }, [updateToEdit, visible, initialTaggedPersonIds, people, personId]);
 
   const requestPermissions = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -107,6 +125,18 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
       return;
     }
 
+    // Extract tagged person IDs from caption @mentions (returns UUIDs)
+    const parsedTaggedIds = parseMentions(
+      caption.trim(),
+      peopleArray,
+      personId
+    );
+    
+    // Merge initialTaggedPersonIds with parsed mentions (ensure auto-tagged people are included)
+    const taggedPersonIds = initialTaggedPersonIds && initialTaggedPersonIds.length > 0
+      ? Array.from(new Set([...initialTaggedPersonIds, ...parsedTaggedIds])) // Remove duplicates
+      : parsedTaggedIds;
+
     if (isEditMode && updateToEdit && onEdit) {
       // Edit mode
       onEdit(updateToEdit.id, title.trim(), photoUri, caption.trim() || undefined, isPublic, taggedPersonIds);
@@ -120,7 +150,6 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
     setPhotoUri(null);
     setCaption('');
     setIsPublic(true);
-    setTaggedPersonIds([]);
     onClose();
   };
 
@@ -129,16 +158,63 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
     setPhotoUri(null);
     setCaption('');
     setIsPublic(true);
-    setTaggedPersonIds([]);
+    setShowMentionSuggestions(false);
+    setMentionQuery('');
     onClose();
   };
 
-  const toggleTag = (personIdToTag: string) => {
-    if (taggedPersonIds.includes(personIdToTag)) {
-      setTaggedPersonIds(taggedPersonIds.filter((id) => id !== personIdToTag));
+  // Handle caption text change and detect @mentions
+  const handleCaptionChange = (text: string) => {
+    setCaption(text);
+    
+    // Find the last @ symbol and text after it
+    const lastAtIndex = text.lastIndexOf('@');
+    if (lastAtIndex !== -1) {
+      // Get text after @
+      const afterAt = text.substring(lastAtIndex + 1);
+      // Check if there's a space or end of string (means we're still typing the mention)
+      const spaceIndex = afterAt.indexOf(' ');
+      const query = spaceIndex === -1 ? afterAt : afterAt.substring(0, spaceIndex);
+      
+      if (query.length >= 0) {
+        setMentionQuery(query);
+        setMentionPosition({ start: lastAtIndex, end: lastAtIndex + 1 + query.length });
+        setShowMentionSuggestions(true);
+      } else {
+        setShowMentionSuggestions(false);
+      }
     } else {
-      setTaggedPersonIds([...taggedPersonIds, personIdToTag]);
+      setShowMentionSuggestions(false);
+      setMentionQuery('');
     }
+  };
+
+  // Filter people based on mention query
+  const filteredPeople = peopleArray.filter((person) => {
+    if (!mentionQuery) return true;
+    const queryLower = mentionQuery.toLowerCase();
+    const nameLower = person.name.toLowerCase();
+    const firstName = person.name.split(' ')[0].toLowerCase();
+    const lastName = person.name.split(' ').pop()?.toLowerCase() || '';
+    
+    return (
+      nameLower.includes(queryLower) ||
+      firstName.startsWith(queryLower) ||
+      lastName.startsWith(queryLower)
+    );
+  }).slice(0, 5); // Limit to 5 suggestions
+
+  // Insert mention into caption (using UUID-based mention string with context)
+  const insertMention = (person: Person) => {
+    const mentionText = getMentionString(person, peopleArray, personId);
+    const beforeMention = caption.substring(0, mentionPosition.start);
+    const afterMention = caption.substring(mentionPosition.end);
+    const newCaption = `${beforeMention}@${mentionText} ${afterMention}`;
+    setCaption(newCaption);
+    setShowMentionSuggestions(false);
+    setMentionQuery('');
+    // Keep focus on input
+    captionInputRef.current?.focus();
   };
 
   return (
@@ -148,7 +224,12 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
       presentationStyle="pageSheet"
       onRequestClose={handleCancel}
     >
-      <ThemedView style={styles.container}>
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoidingView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+      >
+        <ThemedView style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
           <Pressable onPress={handleCancel} style={styles.headerButton}>
@@ -178,6 +259,7 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
           style={styles.scrollView}
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled={true}
         >
           {/* Title - At the top */}
           <View style={styles.field}>
@@ -230,72 +312,76 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
             </Pressable>
           )}
 
-          {/* Caption */}
+          {/* Caption with @mention hint */}
           <View style={styles.field}>
             <ThemedText style={styles.label}>Share your story</ThemedText>
-            <TextInput
-              style={[
-                styles.textArea,
-                {
-                  color: colors.text,
-                  borderColor: colors.icon,
-                  backgroundColor: colors.background,
-                },
-              ]}
-              value={caption}
-              onChangeText={setCaption}
-              placeholder="Add a caption..."
-              placeholderTextColor={colors.icon}
-              multiline
-              numberOfLines={4}
-              textAlignVertical="top"
-            />
-          </View>
-
-          {/* Tag People */}
-          {availablePeople.length > 0 && (
-            <View style={styles.field}>
-              <ThemedText style={styles.label}>Tag People</ThemedText>
-              <ThemedText style={styles.hint}>
-                Select people who are also in this photo
-              </ThemedText>
-              <ScrollView 
-                horizontal 
-                showsHorizontalScrollIndicator={false}
-                style={styles.tagScrollView}
-                contentContainerStyle={styles.tagContainer}
-              >
-                {availablePeople.map((person) => {
-                  const isTagged = taggedPersonIds.includes(person.id);
-                  return (
-                    <Pressable
-                      key={person.id}
-                      onPress={() => toggleTag(person.id)}
-                      style={[
-                        styles.tagChip,
-                        { 
-                          backgroundColor: isTagged ? colors.tint : colors.background,
-                          borderColor: isTagged ? colors.tint : colors.icon,
-                        },
-                      ]}
-                    >
-                      <ThemedText
-                        style={[
-                          styles.tagChipText,
-                          { color: isTagged ? '#FFFFFF' : colors.text },
+            <ThemedText style={styles.hint}>
+              Use @name to tag people in this photo (e.g., "Having fun with @John and @Mary")
+            </ThemedText>
+            <View style={styles.captionContainer}>
+              <TextInput
+                ref={captionInputRef}
+                style={[
+                  styles.textArea,
+                  {
+                    color: colors.text,
+                    borderColor: colors.icon,
+                    backgroundColor: colors.background,
+                  },
+                ]}
+                value={caption}
+                onChangeText={handleCaptionChange}
+                placeholder="Add a caption... Use @name to tag people"
+                placeholderTextColor={colors.icon}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
+              
+              {/* Mention Suggestions Dropdown */}
+              {showMentionSuggestions && filteredPeople.length > 0 && (
+                <View style={[styles.mentionDropdown, { backgroundColor: colors.background, borderColor: colors.icon }]}>
+                  {filteredPeople.map((item) => {
+                    const mentionText = getMentionString(item, peopleArray, personId);
+                    const displayName = item.name.split(' ')[0] === mentionText.split(' ')[0] 
+                      ? item.name 
+                      : `${item.name.split(' ')[0]} (${mentionText})`; // Show context if different
+                    
+                    return (
+                      <Pressable
+                        key={item.id}
+                        onPress={() => insertMention(item)}
+                        style={({ pressed }) => [
+                          styles.mentionItem,
+                          pressed && { backgroundColor: colors.icon + '20' },
                         ]}
                       >
-                        {person.name}
-                      </ThemedText>
-                      {isTagged && (
-                        <MaterialIcons name="check" size={16} color="#FFFFFF" style={styles.tagCheck} />
-                      )}
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+                        {item.photoUrl ? (
+                          <Image
+                            source={{ uri: item.photoUrl }}
+                            style={styles.mentionAvatar}
+                            contentFit="cover"
+                          />
+                        ) : (
+                          <View style={[styles.mentionAvatarPlaceholder, { backgroundColor: colors.icon }]}>
+                            <MaterialIcons name="person" size={20} color="#FFFFFF" />
+                          </View>
+                        )}
+                        <View style={styles.mentionNameContainer}>
+                          <ThemedText style={styles.mentionName}>{item.name}</ThemedText>
+                          {mentionText !== item.name.split(' ')[0] && (
+                            <ThemedText style={styles.mentionContext}>
+                              Will mention as: @{mentionText}
+                            </ThemedText>
+                          )}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
             </View>
-          )}
+          </View>
 
           {/* Privacy Toggle */}
           <View style={styles.field}>
@@ -320,11 +406,15 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
           </View>
         </ScrollView>
       </ThemedView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  keyboardAvoidingView: {
+    flex: 1,
+  },
   container: {
     flex: 1,
   },
@@ -417,12 +507,64 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
   },
+  captionContainer: {
+    position: 'relative',
+  },
   textArea: {
     borderWidth: 1,
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
     minHeight: 100,
+  },
+  mentionDropdown: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    marginTop: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    maxHeight: 200,
+    zIndex: 1000,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  mentionList: {
+    maxHeight: 200,
+  },
+  mentionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    gap: 12,
+  },
+  mentionAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
+  mentionAvatarPlaceholder: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mentionNameContainer: {
+    flex: 1,
+  },
+  mentionName: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  mentionContext: {
+    fontSize: 11,
+    opacity: 0.6,
+    marginTop: 2,
   },
   hint: {
     fontSize: 12,
@@ -437,27 +579,6 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.7,
-  },
-  tagScrollView: {
-    marginTop: 8,
-  },
-  tagContainer: {
-    gap: 8,
-    paddingRight: 16,
-  },
-  tagChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  tagChipText: {
-    fontSize: 14,
-  },
-  tagCheck: {
-    marginLeft: 4,
   },
 });
 

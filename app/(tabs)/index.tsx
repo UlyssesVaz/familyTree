@@ -171,16 +171,19 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const egoId = useFamilyTreeStore((state) => state.egoId);
+  // Subscribe to people Map - Zustand will trigger re-render when Map reference changes
   const people = useFamilyTreeStore((state) => state.people);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
   const getSiblings = useFamilyTreeStore((state) => state.getSiblings);
   const initializeEgo = useFamilyTreeStore((state) => state.initializeEgo);
   
   // Get ego directly from people Map - this ensures we get updates when ego changes
+  // Also subscribe to people.size to ensure updates trigger recalculation
+  const peopleSize = useFamilyTreeStore((state) => state.people.size);
   const ego = useMemo(() => {
     if (!egoId) return null;
     return people.get(egoId) || null;
-  }, [egoId, people]);
+  }, [egoId, people, peopleSize]);
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
@@ -190,13 +193,29 @@ export default function HomeScreen() {
   const [selectedRelativeType, setSelectedRelativeType] = useState<RelativeType | null>(null);
   const [selectedPerson, setSelectedPerson] = useState<Person | null>(null); // Track which person we're adding to
 
-  // Convert people Map to array for dependency tracking (Maps don't trigger re-renders)
-  const peopleArray = useMemo(() => Array.from(people.values()), [people]);
+  // Convert people Map to array for dependency tracking
+  // Include peopleSize to ensure updates trigger recalculation when people are added
+  const peopleArray = useMemo(() => {
+    const arr = Array.from(people.values());
+    if (__DEV__) {
+      console.log(`[Tree] peopleArray recalculated, size: ${arr.length}, people.size: ${people.size}`);
+    }
+    return arr;
+  }, [people, peopleSize]);
 
   // Recursively get all ancestor generations (parents, grandparents, etc.)
   // Includes siblings of each person in each generation
   const getAllAncestorGenerations = useMemo(() => {
-    if (!ego) return [];
+    if (!ego) {
+      if (__DEV__) {
+        console.log(`[Tree] getAllAncestorGenerations: No ego`);
+      }
+      return [];
+    }
+    
+    if (__DEV__) {
+      console.log(`[Tree] getAllAncestorGenerations: Starting calculation, ego: ${ego.name}, people.size: ${peopleSize}`);
+    }
     
     const generations: Person[][] = [];
     const visited = new Set<string>();
@@ -257,8 +276,17 @@ export default function HomeScreen() {
       currentGeneration = expandGenerationWithSiblings(nextGenerationBase);
     }
     
-    return generations.reverse(); // Reverse so oldest generation is first
-  }, [ego, people, peopleArray, getPerson, getSiblings]); // Include getSiblings dependency
+    const result = generations.reverse(); // Reverse so oldest generation is first
+    
+    if (__DEV__) {
+      console.log(`[Tree] getAllAncestorGenerations: Calculated ${result.length} generations`);
+      result.forEach((gen, idx) => {
+        console.log(`[Tree]   Generation ${idx}: ${gen.length} people - ${gen.map(p => p.name).join(', ')}`);
+      });
+    }
+    
+    return result;
+  }, [ego, ego?.id, people, people.size, peopleArray, getPerson, getSiblings]); // Include size to trigger recalculation
 
   // Recursively get all descendant generations (children, grandchildren, etc.)
   // Includes siblings of each person in each generation
@@ -324,8 +352,15 @@ export default function HomeScreen() {
       currentGeneration = expandGenerationWithSiblings(nextGenerationBase);
     }
     
+    if (__DEV__) {
+      console.log(`[Tree] getAllDescendantGenerations: Calculated ${generations.length} generations`);
+      generations.forEach((gen, idx) => {
+        console.log(`[Tree]   Generation ${idx}: ${gen.length} people - ${gen.map(p => p.name).join(', ')}`);
+      });
+    }
+    
     return generations;
-  }, [ego, people, peopleArray, getPerson, getSiblings]); // Include getSiblings dependency
+  }, [ego, ego?.id, people, peopleSize, peopleArray, getPerson, getSiblings]); // Use peopleSize to trigger recalculation
 
   // Get ego's immediate relationships (for ego row)
   const { spouses, siblings } = useMemo(() => {
@@ -369,10 +404,22 @@ export default function HomeScreen() {
   };
 
   const handleAddStory = () => {
-    // TODO: Phase 2+ - For ego's own card, this shouldn't show
-    // For other people's cards, navigate to their profile and open Add Update modal
-    Alert.alert('Coming Soon', 'Add Story feature will navigate to their profile in a future phase');
+    if (!selectedPerson || !egoId) {
+      setShowAddModal(false);
+      return;
+    }
+    
+    // Don't allow adding story to yourself - navigate to profile and open Add Update modal
+    if (selectedPerson.id === egoId) {
+      setShowAddModal(false);
+      // Navigate to profile with a query param to trigger Add Update modal
+      router.push({ pathname: '/profile', params: { addUpdate: 'true' } });
+      return;
+    }
+    
+    // Navigate to the target person's profile page with addStory param to open Add Update modal there
     setShowAddModal(false);
+    router.push({ pathname: '/person/[personId]', params: { personId: selectedPerson.id, addStory: 'true' } });
   };
 
   const handleSelectRelativeType = (type: RelativeType) => {
@@ -391,9 +438,6 @@ export default function HomeScreen() {
     phoneNumber?: string;
   }) => {
     if (!selectedPerson || !selectedRelativeType) {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:317',message:'Early return - missing selectedPerson or type',data:{hasSelectedPerson:!!selectedPerson,hasSelectedType:!!selectedRelativeType},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       return;
     }
 
@@ -405,9 +449,6 @@ export default function HomeScreen() {
 
     // Create the new person
     const newPersonId = addPerson(data);
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:328',message:'New person created',data:{newPersonId,newPersonName:data.name,selectedPersonId:selectedPerson.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
 
     // Create the relationship based on type
     try {
@@ -494,7 +535,7 @@ export default function HomeScreen() {
               <GenerationRow 
                 people={generation}
                 onPersonAddPress={handleAddPress}
-                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } } as any)}
+                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
               />
             </View>
           ))}
@@ -507,7 +548,7 @@ export default function HomeScreen() {
             onEgoPress={handleEgoCardPress}
             onEgoAddPress={() => handleAddPress(ego)}
             onPersonAddPress={handleAddPress}
-            onPersonPress={(person) => router.push(`/profile?personId=${person.id}`)}
+            onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
           />
 
           {/* Descendant Generations (Below Ego) - Recursively display all child generations */}
@@ -516,7 +557,7 @@ export default function HomeScreen() {
               <GenerationRow 
                 people={generation}
                 onPersonAddPress={handleAddPress}
-                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } } as any)}
+                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
               />
             </View>
           ))}
@@ -577,6 +618,7 @@ export default function HomeScreen() {
               onAdd={handleAddPerson}
             />
           )}
+
         </>
       )}
     </View>

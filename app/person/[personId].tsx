@@ -1,32 +1,89 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, View, Platform } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
+import { Pressable, ScrollView, StyleSheet, View, Modal, Alert, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
-import type { Gender, Person } from '@/types/family-tree';
+import { formatMentions } from '@/utils/format-mentions';
+import { AddUpdateModal } from '@/components/family-tree';
+import type { Gender, Person, Update } from '@/types/family-tree';
 
 export default function PersonProfileModal() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ personId: string }>();
+  const params = useLocalSearchParams<{ personId?: string; addStory?: string }>();
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
   
+  const egoId = useFamilyTreeStore((state) => state.egoId);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
   const getUpdateCount = useFamilyTreeStore((state) => state.getUpdateCount);
   const getUpdatesForPerson = useFamilyTreeStore((state) => state.getUpdatesForPerson);
   const countAncestors = useFamilyTreeStore((state) => state.countAncestors);
   const countDescendants = useFamilyTreeStore((state) => state.countDescendants);
+  const toggleTaggedUpdateVisibility = useFamilyTreeStore((state) => state.toggleTaggedUpdateVisibility);
+  const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
+  const people = useFamilyTreeStore((state) => state.people);
+  const updates = useFamilyTreeStore((state) => state.updates); // Subscribe to updates Map for re-renders
+  const peopleArray = Array.from(people.values());
   
-  const person: Person | null = params.personId ? getPerson(params.personId) || null : null;
-  
+  const personId = params.personId;
+  const person: Person | null = personId ? getPerson(personId) || null : null;
+  const isEgo = personId === egoId;
+
+  const [expandedUpdateId, setExpandedUpdateId] = useState<string | null>(null);
+  const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [isAddingUpdate, setIsAddingUpdate] = useState(false);
+
+  // Use ref to avoid stale closure in useEffect
+  const deleteUpdateRef = useRef(useFamilyTreeStore.getState().deleteUpdate);
+  useEffect(() => {
+    deleteUpdateRef.current = useFamilyTreeStore.getState().deleteUpdate;
+  }, []);
+
+  // Check if we should open Add Update modal from navigation params (for Add Story feature)
+  useEffect(() => {
+    if (params.addStory === 'true' && personId && egoId) {
+      setIsAddingUpdate(true);
+    }
+  }, [params.addStory, personId, egoId]);
+
+  // Show delete alert after menu modal closes
+  useEffect(() => {
+    if (pendingDeleteId && !menuUpdateId) {
+      const updateIdToDelete = pendingDeleteId;
+      setPendingDeleteId(null);
+      
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          Alert.alert(
+            'Delete Update',
+            'Are you sure you want to delete this update?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: () => {
+                  deleteUpdateRef.current(updateIdToDelete);
+                },
+              },
+            ],
+            { cancelable: true }
+          );
+        }, Platform.OS === 'ios' ? 300 : 100);
+      });
+    }
+  }, [pendingDeleteId, menuUpdateId]);
+
   // If no person found, show error
   if (!person) {
     return (
@@ -44,7 +101,7 @@ export default function PersonProfileModal() {
   const ancestorsCount = countAncestors(person.id);
   const descendantsCount = countDescendants(person.id);
   const updatesCount = getUpdateCount(person.id);
-  const updates = getUpdatesForPerson(person.id);
+  const personUpdates = getUpdatesForPerson(person.id);
 
   // Gender-based colors for photo placeholder
   const getGenderColor = (gender?: Gender): string => {
@@ -143,35 +200,226 @@ export default function PersonProfileModal() {
               <ThemedText type="defaultSemiBold" style={styles.updatesTitle}>
                 Updates
               </ThemedText>
+              {/* + Button to add story/memory about this person */}
+              {egoId && (
+                <Pressable
+                  onPress={() => setIsAddingUpdate(true)}
+                  style={({ pressed }) => [
+                    styles.addButton,
+                    pressed && styles.addButtonPressed,
+                  ]}
+                >
+                  <MaterialIcons name="add" size={24} color={colors.tint} />
+                </Pressable>
+              )}
             </View>
 
-            {updates.length === 0 ? (
+            {personUpdates.length === 0 ? (
               <View style={styles.emptyUpdates}>
                 <ThemedText style={[styles.emptyUpdatesText, { color: colors.icon }]}>
                   No updates yet. Tap + to add your first photo!
                 </ThemedText>
               </View>
             ) : (
-              <View style={styles.updatesGrid}>
-                {updates.map((update) => (
-                  <View key={update.id} style={styles.updateItem}>
-                    <Image
-                      source={{ uri: update.photoUrl }}
-                      style={styles.updatePhoto}
-                      contentFit="cover"
-                    />
-                    {!update.isPublic && (
-                      <View style={styles.privateOverlay}>
-                        <MaterialIcons name="lock" size={16} color="#FFFFFF" />
+              <View style={styles.updatesList}>
+                {personUpdates.map((update) => {
+                  const date = new Date(update.createdAt);
+                  const formattedDate = date.toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  });
+                  const isExpanded = expandedUpdateId === update.id;
+                  const showMenu = menuUpdateId === update.id;
+                  const isTaggedUpdate = update.taggedPersonIds?.includes(person.id) && update.personId !== person.id;
+                  const isOwnUpdate = update.personId === person.id;
+
+                  return (
+                    <View key={update.id} style={styles.updateCardWrapper}>
+                      {/* Update card */}
+                      <View
+                        style={[
+                          styles.updateCard,
+                          { borderColor: colors.icon },
+                          !update.isPublic && styles.updateCardPrivate,
+                        ]}
+                      >
+                        {/* Card Header */}
+                        <View style={styles.updateCardHeader}>
+                          <View style={styles.updateCardTitleSection}>
+                            <View style={styles.updateTitleRow}>
+                              <ThemedText type="defaultSemiBold" style={styles.updateTitle}>
+                                {update.title}
+                              </ThemedText>
+                              {isTaggedUpdate && (
+                                <View style={[styles.taggedBadge, { backgroundColor: colors.tint + '20' }]}>
+                                  <MaterialIcons name="person" size={12} color={colors.tint} />
+                                  <ThemedText style={[styles.taggedBadgeText, { color: colors.tint }]}>
+                                    Tagged
+                                  </ThemedText>
+                                </View>
+                              )}
+                            </View>
+                            <View style={styles.updateMetaRow}>
+                              {isTaggedUpdate && (
+                                <ThemedText style={[styles.updateAuthor, { color: colors.icon, opacity: 0.7 }]}>
+                                  {(() => {
+                                    const author = getPerson(update.personId);
+                                    return author ? `by ${author.name}` : '';
+                                  })()}
+                                </ThemedText>
+                              )}
+                              <ThemedText style={[styles.updateDate, { color: colors.icon, opacity: 0.7 }]}>
+                                {formattedDate}
+                              </ThemedText>
+                            </View>
+                          </View>
+                          {/* Menu button - only show for own updates or tagged updates (for hide/show) */}
+                          {(isOwnUpdate || isTaggedUpdate) && (
+                            <Pressable
+                              onPress={() => setMenuUpdateId(update.id)}
+                              style={styles.menuButton}
+                            >
+                              <MaterialIcons name="more-vert" size={20} color={colors.icon} />
+                            </Pressable>
+                          )}
+                        </View>
+
+                        {/* Photo */}
+                        <View style={styles.photoContainerDOM}>
+                          <Image
+                            source={{ uri: update.photoUrl }}
+                            style={styles.updateCardPhoto}
+                            contentFit="cover"
+                          />
+                          {!update.isPublic && (
+                            <View style={styles.privateOverlay}>
+                              <MaterialIcons name="lock" size={16} color="#FFFFFF" />
+                            </View>
+                          )}
+                        </View>
+
+                        {/* Tagged People */}
+                        {update.taggedPersonIds && update.taggedPersonIds.length > 0 && (
+                          <View style={styles.taggedSection}>
+                            <MaterialIcons name="people" size={16} color={colors.icon} />
+                            <ThemedText style={styles.taggedText}>
+                              {(() => {
+                                const taggedPeople = update.taggedPersonIds
+                                  .map(id => getPerson(id))
+                                  .filter(Boolean) as Person[];
+                                if (taggedPeople.length === 1) {
+                                  return `With ${taggedPeople[0].name}`;
+                                }
+                                return `With ${taggedPeople.slice(0, 2).map(p => p.name).join(', ')}${taggedPeople.length > 2 ? ` +${taggedPeople.length - 2} more` : ''}`;
+                              })()}
+                            </ThemedText>
+                          </View>
+                        )}
+
+                        {/* Caption */}
+                        {update.caption && (
+                          <View style={styles.updateCardContent}>
+                            <ThemedText
+                              style={styles.updateCaption}
+                              numberOfLines={isExpanded ? undefined : 3}
+                            >
+                              {formatMentions(update.caption, undefined, peopleArray)}
+                            </ThemedText>
+                            {update.caption.length > 100 && (
+                              <Pressable
+                                onPress={() =>
+                                  setExpandedUpdateId(isExpanded ? null : update.id)
+                                }
+                                style={styles.expandButton}
+                              >
+                                <ThemedText style={styles.expandButtonText}>
+                                  {isExpanded ? 'Show less' : 'Show more'}
+                                </ThemedText>
+                              </Pressable>
+                            )}
+                          </View>
+                        )}
                       </View>
-                    )}
-                  </View>
-                ))}
+
+                      {/* Menu Modal */}
+                      {showMenu && (
+                        <Modal
+                          visible={showMenu}
+                          transparent
+                          animationType="fade"
+                          onRequestClose={() => setMenuUpdateId(null)}
+                        >
+                          <Pressable
+                            style={styles.menuOverlay}
+                            onPress={() => setMenuUpdateId(null)}
+                          >
+                            <Pressable
+                              style={[styles.menu, { backgroundColor: colors.background, borderColor: colors.icon }]}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                              }}
+                            >
+                              {/* For tagged updates, show hide/show option */}
+                              {isTaggedUpdate && (
+                                <Pressable
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    toggleTaggedUpdateVisibility(person.id, update.id);
+                                    setMenuUpdateId(null);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons
+                                    name={person.hiddenTaggedUpdateIds?.includes(update.id) ? 'visibility' : 'visibility-off'}
+                                    size={20}
+                                    color={colors.text}
+                                  />
+                                  <ThemedText style={styles.menuItemText}>
+                                    {person.hiddenTaggedUpdateIds?.includes(update.id) ? 'Show on Profile' : 'Hide from Profile'}
+                                  </ThemedText>
+                                </Pressable>
+                              )}
+                            </Pressable>
+                          </Pressable>
+                        </Modal>
+                      )}
+                    </View>
+                  );
+                })}
               </View>
             )}
           </View>
         </ThemedView>
       </ScrollView>
+
+      {/* Add Update Modal (for Add Story feature - when ego adds a story about this person) */}
+      {egoId && personId && (
+        <AddUpdateModal
+          visible={isAddingUpdate}
+          personId={egoId}
+          initialTaggedPersonIds={[personId]}
+          onClose={() => {
+            setIsAddingUpdate(false);
+          }}
+          onAdd={(title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
+            if (!egoId || !personId) return;
+            
+            // Ensure personId is included in taggedPersonIds (in case modal didn't pass it)
+            const finalTaggedPersonIds = taggedPersonIds && taggedPersonIds.length > 0 
+              ? taggedPersonIds.includes(personId) 
+                ? taggedPersonIds 
+                : [...taggedPersonIds, personId]
+              : [personId];
+            
+            // Create the update with ego as the creator, but tag the target person
+            addUpdate(egoId, title, photoUrl, caption, isPublic, finalTaggedPersonIds);
+            
+            // Close modal - update will appear on this person's profile automatically
+            setIsAddingUpdate(false);
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -273,6 +521,16 @@ const styles = StyleSheet.create({
   updatesTitle: {
     fontSize: 18,
   },
+  addButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addButtonPressed: {
+    opacity: 0.7,
+  },
   emptyUpdates: {
     paddingVertical: 40,
     alignItems: 'center',
@@ -281,27 +539,129 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
-  updatesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 2,
+  updatesList: {
+    gap: 16,
   },
-  updateItem: {
-    width: '33.33%',
+  updateCardWrapper: {
+    marginBottom: 16,
+  },
+  updateCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  updateCardPrivate: {
+    opacity: 0.7,
+  },
+  updateCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    padding: 12,
+  },
+  updateCardTitleSection: {
+    flex: 1,
+  },
+  updateTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  updateTitle: {
+    fontSize: 16,
+    marginBottom: 4,
+  },
+  updateMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  taggedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 12,
+    gap: 4,
+  },
+  taggedBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  updateAuthor: {
+    fontSize: 12,
+  },
+  updateDate: {
+    fontSize: 12,
+  },
+  menuButton: {
+    padding: 4,
+  },
+  photoContainerDOM: {
+    width: '100%',
     aspectRatio: 1,
     position: 'relative',
   },
-  updatePhoto: {
+  updateCardPhoto: {
     width: '100%',
     height: '100%',
   },
   privateOverlay: {
     position: 'absolute',
-    top: 4,
-    right: 4,
+    top: 8,
+    right: 8,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     borderRadius: 12,
-    padding: 4,
+    padding: 6,
+  },
+  taggedSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  taggedText: {
+    fontSize: 13,
+    opacity: 0.8,
+  },
+  updateCardContent: {
+    padding: 12,
+  },
+  updateCaption: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  expandButton: {
+    marginTop: 8,
+  },
+  expandButtonText: {
+    fontSize: 14,
+    color: '#007AFF',
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  menu: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingVertical: 8,
+    borderWidth: 1,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    gap: 12,
+  },
+  menuItemText: {
+    fontSize: 16,
   },
 });
-

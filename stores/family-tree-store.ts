@@ -54,6 +54,9 @@ interface FamilyTreeStore {
   /** Delete an update */
   deleteUpdate: (updateId: string) => void;
 
+  /** Toggle visibility of a tagged update on a person's profile */
+  toggleTaggedUpdateVisibility: (personId: string, updateId: string) => void;
+
   /** Create a new person and add to store */
   addPerson: (data: {
     name: string;
@@ -128,7 +131,8 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     const newPeople = new Map(people);
     newPeople.set(egoId, updatedEgo);
 
-    set({ people: newPeople });
+    // Force a new Map reference to ensure Zustand detects the change
+    set({ people: new Map(newPeople) });
   },
 
   getPerson: (id) => {
@@ -231,13 +235,50 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     set({ updates: newUpdates });
   },
 
-  getUpdatesForPerson: (personId) => {
-    const { updates } = get();
-    const personUpdates = Array.from(updates.values())
-      .filter(update => update.personId === personId)
-      .sort((a, b) => b.createdAt - a.createdAt); // Newest first
+  getUpdatesForPerson: (personId, includeTagged = true) => {
+    const { updates, people } = get();
+    const person = people.get(personId);
+    const allUpdates = Array.from(updates.values());
     
-    return personUpdates;
+    // Get updates created by this person
+    // BUT exclude updates where person created it but only tagged others (not themselves)
+    // This handles the "Add Story" case where ego creates a memory about someone else
+    const ownUpdates = allUpdates.filter(update => {
+      if (update.personId !== personId) return false;
+      
+      // If update has tags, check if person is tagged in their own update
+      if (update.taggedPersonIds && update.taggedPersonIds.length > 0) {
+        // If person is tagged in their own update, include it
+        if (update.taggedPersonIds.includes(personId)) {
+          return true;
+        }
+        // If person created it but only tagged others (not themselves), exclude it
+        // This is a memory about someone else, not about themselves
+        return false;
+      }
+      
+      // No tags, so it's their own update - include it
+      return true;
+    });
+    
+    // Get updates where this person is tagged (if includeTagged is true)
+    // Exclude updates that person has hidden
+    const hiddenIds = person?.hiddenTaggedUpdateIds || [];
+    const taggedUpdates = includeTagged
+      ? allUpdates.filter(update => 
+          update.taggedPersonIds?.includes(personId) &&
+          !hiddenIds.includes(update.id)
+        )
+      : [];
+    
+    // Combine and sort by date (newest first)
+    const combined = [...ownUpdates, ...taggedUpdates];
+    // Remove duplicates (in case person created update and tagged themselves)
+    const unique = Array.from(
+      new Map(combined.map(update => [update.id, update])).values()
+    );
+    
+    return unique.sort((a, b) => b.createdAt - a.createdAt);
   },
 
   getUpdateCount: (personId) => {
@@ -292,6 +333,32 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     // #endregion
     
     console.log(`Deleted update ${updateId}. Remaining updates: ${newUpdates.size}`);
+  },
+
+  toggleTaggedUpdateVisibility: (personId, updateId) => {
+    const { people } = get();
+    const person = people.get(personId);
+    if (!person) return;
+    
+    const hiddenIds = person.hiddenTaggedUpdateIds || [];
+    const isHidden = hiddenIds.includes(updateId);
+    
+    const newHiddenIds = isHidden
+      ? hiddenIds.filter(id => id !== updateId)
+      : [...hiddenIds, updateId];
+    
+    const updatedPerson: Person = {
+      ...person,
+      hiddenTaggedUpdateIds: newHiddenIds.length > 0 ? newHiddenIds : undefined,
+      updatedAt: Date.now(),
+      version: person.version + 1,
+    };
+    
+    const newPeople = new Map(people);
+    newPeople.set(personId, updatedPerson);
+    
+    // Force a new Map reference to ensure Zustand detects the change
+    set({ people: new Map(newPeople) });
   },
 
   addPerson: (data) => {
@@ -362,7 +429,14 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     newPeople.set(childId, updatedChild);
     newPeople.set(parentId, updatedParent);
 
-    set({ people: newPeople });
+    // Force a new Map reference to ensure Zustand detects the change
+    set({ people: new Map(newPeople) });
+    
+    if (__DEV__) {
+      const childName = updatedChild.name;
+      const parentName = updatedParent.name;
+      console.log(`[Store] Added parent relationship: ${parentName} -> ${childName}`);
+    }
   },
 
   addSpouse: (personId1, personId2) => {
@@ -406,7 +480,12 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     newPeople.set(personId1, updatedPerson1);
     newPeople.set(personId2, updatedPerson2);
 
-    set({ people: newPeople });
+    // Force a new Map reference to ensure Zustand detects the change
+    set({ people: new Map(newPeople) });
+    
+    if (__DEV__) {
+      console.log(`[Store] Added spouse relationship: ${updatedPerson1.name} <-> ${updatedPerson2.name}`);
+    }
   },
 
   addChild: (parentId, childId) => {
@@ -450,7 +529,12 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     newPeople.set(parentId, updatedParent);
     newPeople.set(childId, updatedChild);
 
-    set({ people: newPeople });
+    // Force a new Map reference to ensure Zustand detects the change
+    set({ people: new Map(newPeople) });
+    
+    if (__DEV__) {
+      console.log(`[Store] Added child relationship: ${updatedParent.name} -> ${updatedChild.name}`);
+    }
   },
 
   addSibling: (personId1, personId2) => {
@@ -550,8 +634,12 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     }
 
     if (hasChanges) {
-      set({ people: newPeople });
-      console.log(`Sibling relationship created between ${person1.name} and ${person2.name}`);
+      // Force a new Map reference to ensure Zustand detects the change
+      set({ people: new Map(newPeople) });
+      
+      if (__DEV__) {
+        console.log(`[Store] Added sibling relationship: ${person1.name} <-> ${person2.name}`);
+      }
     }
   },
 
