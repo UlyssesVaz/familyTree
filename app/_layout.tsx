@@ -13,18 +13,19 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { ColorSchemeProvider, useColorSchemeContext } from '@/contexts/color-scheme-context';
+import { AuthProvider } from '@/contexts/auth-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+// No default route - let routing guard handle navigation
 
 function RootLayoutNav() {
   const { colorScheme } = useColorSchemeContext();
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+        <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="person/[personId]" options={{ presentation: 'modal', headerShown: false }} />
@@ -40,7 +41,9 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ErrorBoundary>
           <ColorSchemeProvider>
-            <RootLayoutNav />
+            <AuthProvider>
+              <RootLayoutNav />
+            </AuthProvider>
           </ColorSchemeProvider>
         </ErrorBoundary>
       </SafeAreaProvider>

@@ -1,365 +1,542 @@
-# Family Tree App - Current State & Roadmap Analysis
+# Family Tree App - Comprehensive Code Analysis
 
-## 🎯 What We Just Completed
-
-### ✅ @Mention Tagging System
-**What it was (chip-based tagging):**
-- Horizontal scrollable chips showing all family members
-- Tap chips to select/deselect people to tag
-- Visual checkmarks on selected chips
-- Separate UI section above caption field
-
-**What it is now (@mention tagging):**
-- Natural Instagram-style @mentions in caption text
-- Parse `@name` patterns from caption automatically
-- Match names to people in tree (exact, first name, last name, partial)
-- Extract person IDs and store in `taggedPersonIds`
-- Display @mentions with blue highlight in captions
-- "Group Photos" filter shows updates with 4+ tagged people
-
-**Files Changed:**
-- `utils/mentions.ts` - New utility for parsing and matching mentions
-- `utils/format-mentions.tsx` - New utility for styling @mentions in display
-- `components/family-tree/AddUpdateModal.tsx` - Removed chip UI, added @mention parsing
-- `app/(tabs)/explore.tsx` - Added @mention formatting in captions
-- `app/(tabs)/profile.tsx` - Added @mention formatting in captions
+## 1. Tab Rename ✅
+- ✅ Renamed "explore" tab to "family"
+- ✅ Updated tab layout configuration
+- ✅ Renamed component from `ExploreScreen` to `FamilyScreen`
+- ✅ Updated icon to `people.fill` (more appropriate)
 
 ---
 
-## 📍 Where We Are Now
+## 2. Frontend Completeness Check (vs Roadmap)
 
-### ✅ Completed Features
+### ✅ Completed (Beyond Roadmap)
+- **Phase 1-5**: Core tree functionality complete
+- **Profile System**: Instagram-style profile with updates (not in roadmap)
+- **Family Feed**: Family updates timeline (not in roadmap)
+- **Infinite Canvas**: Pan/zoom infrastructure (partially complete)
+- **Date Picker**: Native calendar integration
+- **Story/Update System**: Add stories to any person's profile
 
-#### Core Tree Functionality
-- ✅ Ego-centric family tree visualization
-- ✅ Add relatives (parent, spouse, child, sibling) from any card
-- ✅ Recursive generation display (ancestors/descendants)
-- ✅ Infinite canvas with pan/zoom
-- ✅ Horizontal layout for spouses/siblings
-- ✅ Vertical layout for ancestors/descendants
+### ⚠️ Missing from Roadmap
 
-#### Profile & Updates
-- ✅ Instagram-style profile pages
-- ✅ Add/edit/delete updates (photos with captions)
-- ✅ Privacy toggle (public/private)
-- ✅ Update timeline display
-- ✅ View other people's profiles (modal route)
+#### Phase 0: Foundation
+- ✅ Type definitions exist (`Person`, `Update` interfaces)
+- ⚠️ **Missing**: `FamilyTreeState` interface (store interface exists but not exported as type)
 
-#### Family Feed (Explore Tab)
-- ✅ Aggregated feed of all family updates
-- ✅ Family header (photo placeholder + name)
-- ✅ Filter: "All" vs "Group Photos" (4+ tagged people)
-- ✅ Tagged people display ("With [names]")
-- ✅ Add updates from feed
-- ✅ Edit/delete own updates only
+#### Phase 2: Onboarding & Auth
+- ❌ **Not Started**: Auth flow structure
+- ❌ **Not Started**: Onboarding screens
+- ❌ **Not Started**: Invite flow handling
 
-#### Tagging System
-- ✅ @mention parsing from captions
-- ✅ Name matching (exact, first name, last name, partial)
-- ✅ Tagged people display
-- ✅ Group Photos filter
-- ✅ Styled @mentions in captions (blue highlight)
+#### Phase 4: DAG Validation
+- ❌ **Missing**: `utils/dag-validation.ts` - Cycle detection
+- ❌ **Missing**: Merge detection logic
+- ❌ **Missing**: Conflict prevention (version tracking exists but not used)
 
-#### Collaboration Features (Phase 1-2)
-- ✅ Phone number field on Person
-- ✅ Native share sheet for invites
-- ✅ Profile viewing for all family members
-- ✅ Modal routes for non-ego profiles
+#### Phase 6: Graph Visualization
+- ⚠️ **Partial**: Layout algorithm exists but basic
+- ❌ **Missing**: Connection lines rendering
+- ⚠️ **Partial**: Pan/zoom working on web, mobile in progress
 
----
+#### Phase 7: Multi-User Collaboration
+- ⚠️ **Partial**: Optimistic updates (UI updates immediately)
+- ❌ **Missing**: Real-time sync (Firebase/Supabase)
+- ❌ **Missing**: Conflict resolution UI
+- ❌ **Missing**: Permissions system
 
-## 🗺️ Where We Want to Go
-
-### Phase 3: Invite System (Backend Required)
-**Goal:** Generate unique invite codes/links, support deep linking, accept/reject flow
-
-**What's Needed:**
-- Backend API for invite code generation
-- Database to store invites (code, personId, status, expiresAt)
-- Deep linking configuration (`yourapp://invite/{code}`)
-- Accept/reject invite UI flow
-- Link phone numbers to user accounts
-
-**Questions to Answer:**
-1. **Backend Choice:** Supabase, Firebase, or custom Node.js API?
-2. **Invite Format:** UUID-based codes or shorter human-readable codes?
-3. **Expiration:** Should invites expire? How long?
-4. **Account Linking:** How do we link phone numbers to user accounts?
-5. **Deep Linking:** Use Expo Linking or custom scheme handler?
-
-### Phase 4: Multi-User Collaboration (Backend Required)
-**Goal:** Real-time sync, conflict resolution, multi-user editing
-
-**What's Needed:**
-- User authentication system
-- Backend database (people, updates, relationships)
-- Real-time sync (Firestore/Supabase subscriptions)
-- Conflict resolution (timestamp-based → CRDTs later)
-- Optimistic updates with pending states
-- Offline support
-
-**Questions to Answer:**
-1. **Auth Provider:** Firebase Auth, Supabase Auth, or custom?
-2. **Sync Strategy:** Real-time subscriptions or polling?
-3. **Conflict Resolution:** Last-write-wins initially, then CRDTs?
-4. **Permissions:** Role-based (admin/editor/viewer) or per-node?
-5. **Offline:** How much data to cache locally?
-
-### Phase 5: Advanced Features
-**Goal:** Enhanced UX, performance, scalability
-
-**What's Needed:**
-- Photo upload to cloud storage
-- Search functionality
-- Notifications for tags/updates
-- Activity log/feed improvements
-- Performance optimization (virtualization, lazy loading)
-
-**Questions to Answer:**
-1. **Photo Storage:** Cloudinary, AWS S3, or Firebase Storage?
-2. **Search:** Full-text search or simple name matching?
-3. **Notifications:** Push notifications or in-app only?
-4. **Performance:** When to add virtualization? (100+ nodes? 1000+?)
+#### Phase 8: Persistence
+- ❌ **Missing**: AsyncStorage integration
+- ❌ **Missing**: Backend API integration
+- ❌ **Missing**: Search functionality
 
 ---
 
-## 🤔 Key Questions We Need to Answer
+## 3. Separation of Concerns Analysis
 
-### 1. Backend Architecture
-**Question:** What backend infrastructure should we use?
+### ✅ **Well Separated**
 
-**Options:**
-- **Supabase** (PostgreSQL + real-time + auth)
-  - Pros: Real-time subscriptions, SQL database, built-in auth, free tier
-  - Cons: Learning curve, vendor lock-in
-- **Firebase** (Firestore + Auth + Storage)
-  - Pros: Real-time, easy setup, Google ecosystem
-  - Cons: NoSQL, vendor lock-in, pricing can scale
-- **Custom Node.js API**
-  - Pros: Full control, any database, flexible
-  - Cons: More setup/maintenance, need to build everything
+#### **Types** (`types/family-tree.ts`)
+- ✅ Clean interfaces for `Person` and `Update`
+- ✅ No business logic
+- ✅ Well documented
 
-**Recommendation:** Start with Supabase for MVP (real-time + SQL + auth), can migrate later if needed.
+#### **Store** (`stores/family-tree-store.ts`)
+- ✅ Single responsibility: State management
+- ✅ Pure functions for actions
+- ✅ No UI logic
+- ✅ Bidirectional relationship management is clean
 
-### 2. Invite System Design
-**Question:** How should invites work?
+#### **Components** (`components/family-tree/`)
+- ✅ Reusable components
+- ✅ Props-based configuration
+- ✅ No direct store access (uses hooks)
 
-**Current State:** 
-- Phone number stored on Person
-- Native share sheet for sending invites
-- Placeholder message: "[Invite link will be added here in Phase 3]"
+#### **Utils** (`utils/`)
+- ✅ Pure functions
+- ✅ Mention parsing/formatting separated
 
-**Design Decisions Needed:**
-- **Invite Code Format:** UUID (long but unique) vs short codes (6-8 chars, need collision handling)
-- **Invite Link Format:** `yourapp://invite/{code}` vs `https://app.com/invite/{code}` (web fallback)
-- **Expiration:** Should invites expire? (e.g., 30 days)
-- **One-time vs Multi-use:** Can one invite be used multiple times?
-- **Account Linking:** When someone accepts invite, do they:
-  - Create new account linked to that Person?
-  - Join existing family tree?
-  - Merge with existing account?
+### ⚠️ **Areas for Improvement**
 
-**Recommendation:** 
-- Short codes (8 chars, alphanumeric)
-- Expire after 30 days
-- One-time use (mark as "accepted" after first use)
-- Deep link: `yourapp://invite/{code}` with web fallback
+#### **1. Screen Components Too Large**
+- `app/(tabs)/index.tsx` (707 lines) - Tree visualization logic mixed with UI
+- `app/(tabs)/profile.tsx` (862 lines) - Profile logic + update rendering + modals
+- `app/(tabs)/family.tsx` (552 lines) - Feed logic + filtering + modals
 
-### 3. User Account Model
-**Question:** How do users relate to people in the tree?
-
-**Current State:**
-- No user accounts yet
-- Single ego per app instance
-- All data is local (Zustand store)
-
-**Design Decisions Needed:**
-- **One-to-One:** One user account = one Person in tree?
-- **One-to-Many:** One user can manage multiple trees?
-- **Many-to-One:** Multiple users can edit same Person? (e.g., siblings both editing parent's info)
-- **Account Creation:** When does account get created? (onboarding vs invite acceptance)
-
-**Recommendation:**
-- One user account = one Person (ego)
-- User can view/edit their own Person + relatives
-- Multiple users can edit same Person (with conflict resolution)
-- Account created during onboarding OR when accepting invite
-
-### 4. Data Sync Strategy
-**Question:** How should data sync between devices/users?
-
-**Current State:**
-- All data local (Zustand Maps)
-- No persistence yet
-- No sync
-
-**Design Decisions Needed:**
-- **Real-time:** WebSocket subscriptions (Firestore/Supabase) vs polling?
-- **Optimistic Updates:** Update UI immediately, sync in background?
-- **Conflict Resolution:** Last-write-wins vs CRDTs vs manual merge?
-- **Offline Support:** How much to cache? What happens when offline?
-
-**Recommendation:**
-- Real-time subscriptions (Supabase/Firestore)
-- Optimistic updates (show changes immediately)
-- Timestamp-based conflict resolution initially (last-write-wins)
-- Cache last 100 updates + all people locally
-- Queue mutations when offline, sync when online
-
-### 5. Permissions & Access Control
-**Question:** Who can edit what?
-
-**Current State:**
-- No permissions system
-- Anyone can edit anything (in local state)
-
-**Design Decisions Needed:**
-- **Role-based:** Admin/Editor/Viewer roles?
-- **Per-node:** Each Person has edit permissions?
-- **Relationship-based:** Can edit yourself + direct relatives?
-- **Invite-based:** Only people invited to tree can edit?
-
-**Recommendation:**
-- Start simple: Anyone in tree can edit anything
-- Add per-node permissions later (e.g., "only I can edit my profile")
-- Role-based for tree-level permissions (admin can delete tree, etc.)
-
-### 6. Photo Storage
-**Question:** Where should photos be stored?
-
-**Current State:**
-- Photos stored as local URIs (`file://` paths)
-- No cloud storage
-
-**Design Decisions Needed:**
-- **Storage Provider:** Cloudinary, AWS S3, Firebase Storage, Supabase Storage?
-- **Image Processing:** Resize/compress on upload?
-- **CDN:** Use CDN for fast delivery?
-- **Cost:** Free tier limits? Pricing model?
-
-**Recommendation:**
-- Supabase Storage (if using Supabase) or Cloudinary
-- Resize to max 2000px width, compress to 80% quality
-- Use CDN for delivery
-- Free tier should cover MVP needs
-
----
-
-## 🚀 Next Steps (Incremental)
-
-### Immediate (No Backend Required)
-1. ✅ **@Mention Tagging** - DONE
-2. **Photo Upload to Cloud** - Add cloud storage integration
-3. **Search Functionality** - Search people by name in tree
-4. **Notifications** - In-app notifications for tags/mentions
-
-### Short-term (Backend MVP)
-1. **Backend Setup** - Choose and set up Supabase/Firebase
-2. **User Authentication** - Email/phone auth
-3. **Local Persistence** - Save to AsyncStorage, load on startup
-4. **Basic Sync** - One-way sync (local → backend) initially
-
-### Medium-term (Full Backend)
-1. **Real-time Sync** - Two-way sync with subscriptions
-2. **Invite System** - Generate codes, deep linking, accept flow
-3. **Conflict Resolution** - Handle simultaneous edits
-4. **Multi-user Testing** - Test with multiple users/devices
-
-### Long-term (Advanced Features)
-1. **CRDTs** - Upgrade conflict resolution to CRDTs
-2. **Advanced Search** - Full-text search, filters
-3. **Push Notifications** - Notify on tags/updates
-4. **Performance** - Virtualization, lazy loading, optimization
-
----
-
-## 📊 Current Architecture
-
-### Frontend (React Native + Expo)
-- **State:** Zustand store (Maps for O(1) lookups)
-- **Navigation:** Expo Router (file-based routing)
-- **UI:** Custom components (Instagram/FamilySearch inspired)
-- **Data:** Local only (no backend yet)
-
-### Data Structure
+**Recommendation**: Extract logic into custom hooks:
 ```typescript
-Person {
-  id: string (UUID)
-  name: string
-  phoneNumber?: string
-  // ... relationships, timestamps, etc.
+// hooks/use-tree-layout.ts
+export function useTreeLayout(egoId: string) {
+  // Calculate positions, relationships, etc.
+  return { parents, spouses, children, positions };
 }
 
-Update {
-  id: string (UUID)
-  personId: string
-  title: string
-  photoUrl: string (local URI)
-  caption?: string (with @mentions)
-  taggedPersonIds?: string[]
-  // ... timestamps, privacy, etc.
+// hooks/use-profile-updates.ts
+export function useProfileUpdates(personId: string) {
+  // Filter, sort, manage update state
+  return { updates, isLoading, refetch };
 }
 ```
 
-### What's Missing
-- ❌ Backend API
-- ❌ User authentication
-- ❌ Cloud storage
-- ❌ Real-time sync
-- ❌ Local persistence (AsyncStorage)
-- ❌ Deep linking
-- ❌ Invite system
+#### **2. Modal State Management**
+- Multiple modals managed in parent components
+- State scattered across components
+
+**Recommendation**: Create a modal context/provider:
+```typescript
+// contexts/modal-context.tsx
+export function ModalProvider({ children }) {
+  const [modals, setModals] = useState({});
+  // Centralized modal state
+}
+```
+
+#### **3. Business Logic in Components**
+- Relationship calculations in `index.tsx`
+- Update filtering logic in `family.tsx`
+
+**Recommendation**: Move to store selectors or utils:
+```typescript
+// stores/family-tree-store.ts
+getTreeLayout: (egoId: string) => TreeLayout
+
+// utils/tree-layout.ts
+export function calculateTreeLayout(people: Map, egoId: string): TreeLayout
+```
+
+#### **4. Missing Service Layer**
+- Direct store access everywhere
+- No abstraction for future API calls
+
+**Recommendation**: Create service layer:
+```typescript
+// services/family-tree-service.ts
+export class FamilyTreeService {
+  async addPerson(data) { /* API call + store update */ }
+  async syncTree() { /* Fetch from API */ }
+}
+```
 
 ---
 
-## 🎯 Success Criteria
+## 4. Tech Stack Review
 
-### MVP (Minimum Viable Product)
-- ✅ Core tree functionality
-- ✅ Profile & updates
-- ✅ Family feed
-- ✅ @Mention tagging
-- ⏳ Backend sync (in progress)
-- ⏳ User accounts (next)
-- ⏳ Invite system (next)
+### ✅ **Current Stack is Solid**
 
-### Full Product Vision
-- Multi-user collaboration
-- Real-time sync
-- Invite system
-- Cloud photo storage
-- Search & discovery
-- Notifications
-- Mobile + web support
+#### **React Native + Expo**
+- ✅ Excellent choice for mobile-first
+- ✅ Cross-platform (web, iOS, Android)
+- ✅ Good developer experience
+- ✅ Rich ecosystem
+
+#### **Zustand**
+- ✅ Lightweight, no boilerplate
+- ✅ Good for optimistic updates
+- ✅ Easy to add persistence later
+- ⚠️ Consider: For complex state, might need middleware
+
+#### **Expo Router**
+- ✅ File-based routing (familiar)
+- ✅ Type-safe routes
+- ✅ Good for this use case
+
+#### **UUID v4**
+- ✅ Perfect for distributed systems
+- ✅ No collisions
+- ✅ Works offline
+
+### ⚠️ **Potential Improvements**
+
+#### **1. State Management**
+**Current**: Zustand with Maps
+**Consider**: 
+- Add `zustand/middleware` for persistence (AsyncStorage)
+- Add `immer` middleware for immutable updates (cleaner code)
+- Consider `@tanstack/react-query` for server state (when backend added)
+
+#### **2. Form Management**
+**Current**: Manual state management in modals
+**Consider**: 
+- `react-hook-form` for form validation/state
+- `zod` for schema validation (TypeScript-first)
+
+#### **3. Date Handling**
+**Current**: Manual YYYY-MM-DD strings
+**Consider**: 
+- `date-fns` or `dayjs` for date operations
+- Already using native date picker ✅
+
+#### **4. Testing**
+**Missing**: No test infrastructure
+**Recommend**: 
+- `jest` + `@testing-library/react-native`
+- Add unit tests for store actions
+- Add integration tests for critical flows
+
+#### **5. Error Handling**
+**Current**: Basic error handling
+**Consider**: 
+- Error boundary (exists ✅)
+- Error logging service (Sentry?)
+- User-friendly error messages
+
+#### **6. Performance**
+**Current**: Basic memoization
+**Consider**: 
+- `react-native-reanimated` (already using ✅)
+- `react-native-fast-image` for image optimization
+- Virtual lists for large trees (`@shopify/flash-list`)
 
 ---
 
-## 💡 Key Insights
+## 5. Best Engineering Practices
 
-1. **Incremental Approach Works:** We've built complex features incrementally without breaking existing functionality
-2. **Frontend-First Strategy:** Building UI/UX first, backend later, allows for faster iteration
-3. **Natural Patterns:** @Mentions feel more natural than chip-based tagging (Instagram/Twitter pattern)
-4. **Backend Decision Needed:** We're at the point where backend choice will impact architecture
-5. **Data Model is Solid:** Current Person/Update structure supports multi-user collaboration
+### ✅ **Following Best Practices**
+
+1. **TypeScript**: Full type safety
+2. **Component Composition**: Reusable components
+3. **Single Responsibility**: Components do one thing
+4. **Immutable Updates**: Zustand enforces immutability
+5. **Error Boundaries**: Error handling in place
+6. **Platform Detection**: Platform-specific code handled
+7. **Safe Area**: Proper mobile safe area handling
+
+### ⚠️ **Areas to Improve**
+
+#### **1. Code Organization**
+- Large files (700+ lines)
+- **Fix**: Extract hooks, utils, sub-components
+
+#### **2. Testing**
+- No tests
+- **Fix**: Add unit tests for store, utils
+- Add integration tests for critical flows
+
+#### **3. Documentation**
+- Good inline comments
+- **Missing**: API documentation, architecture docs
+- **Fix**: Add JSDoc for public APIs
+
+#### **4. Error Handling**
+- Basic error boundaries
+- **Missing**: Error recovery, retry logic
+- **Fix**: Add error context, user-friendly messages
+
+#### **5. Performance Monitoring**
+- No performance tracking
+- **Fix**: Add performance monitoring (React DevTools Profiler)
+
+#### **6. Accessibility**
+- Basic accessibility
+- **Missing**: Screen reader support, accessibility labels
+- **Fix**: Add `accessibilityLabel`, `accessibilityRole`
 
 ---
 
-## 🔄 Migration Path
+## 6. Connection Lines Implementation Approach
 
-### When Adding Backend:
-1. **Keep Local State:** Zustand store remains, syncs with backend
-2. **Add Sync Layer:** Create sync service that reads/writes to backend
-3. **Gradual Migration:** Start with one-way sync (local → backend), then two-way
-4. **Conflict Handling:** Add version numbers, timestamps for conflict detection
-5. **Offline Support:** Queue mutations when offline, sync when online
+### **The Challenge**
+Drawing lines between cards requires:
+1. **Absolute positioning** of cards
+2. **Calculated coordinates** for connection points
+3. **SVG or Canvas** rendering for lines
+4. **Layout algorithm** that provides consistent spacing
 
-### When Adding Auth:
-1. **Onboarding Flow:** Create account during initial setup
-2. **Invite Flow:** Link account when accepting invite
-3. **Session Management:** Store auth token, refresh as needed
-4. **Protected Routes:** Redirect to login if not authenticated
+### **Why It Broke Before**
+- Cards in ScrollViews have **relative positioning**
+- No fixed coordinate system
+- Lines need **absolute coordinates** but cards are **flexbox/relative**
+
+### **Recommended Approach**
+
+#### **Option 1: SVG Overlay (Recommended)**
+```typescript
+// components/family-tree/TreeConnections.tsx
+import Svg, { Line, Path } from 'react-native-svg';
+
+export function TreeConnections({ connections }) {
+  return (
+    <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
+      {connections.map(({ from, to, type }) => (
+        <Line
+          x1={from.x}
+          y1={from.y}
+          x2={to.x}
+          y2={to.y}
+          stroke="#ccc"
+          strokeWidth={2}
+        />
+      ))}
+    </Svg>
+  );
+}
+```
+
+**Implementation Steps**:
+1. **Calculate card positions** using `onLayout` callbacks
+2. **Store positions** in state/context
+3. **Render SVG overlay** above cards but below interactions
+4. **Update on layout changes** (use `useEffect` + `onLayout`)
+
+**Key Points**:
+- Use `react-native-svg` (already in ecosystem)
+- Position SVG absolutely over the tree
+- Calculate connection points (card centers, top/bottom edges)
+- Handle pan/zoom by transforming SVG coordinates
+
+#### **Option 2: Canvas-Based (More Complex)**
+- Use `react-native-skia` for advanced rendering
+- Better for complex animations
+- More performance overhead
+
+#### **Option 3: CSS/View-Based (Limited)**
+- Use `View` with `borderWidth` and rotation
+- Very limited, doesn't work well for complex trees
+- Not recommended
+
+### **Specific Implementation Strategy**
+
+```typescript
+// 1. Track card positions
+const [cardPositions, setCardPositions] = useState<Map<string, Position>>();
+
+// 2. Measure cards on layout
+<PersonCard
+  onLayout={(event) => {
+    const { x, y, width, height } = event.nativeEvent.layout;
+    setCardPositions(prev => new Map(prev).set(personId, {
+      x: x + width / 2,  // center X
+      y: y + height / 2, // center Y
+      top: y,
+      bottom: y + height,
+    }));
+  }}
+/>
+
+// 3. Calculate connections
+const connections = useMemo(() => {
+  const lines = [];
+  // Parent-child lines
+  parents.forEach(parent => {
+    const parentPos = cardPositions.get(parent.id);
+    const childPos = cardPositions.get(egoId);
+    if (parentPos && childPos) {
+      lines.push({
+        from: { x: parentPos.x, y: parentPos.bottom },
+        to: { x: childPos.x, y: childPos.top },
+        type: 'parent-child'
+      });
+    }
+  });
+  return lines;
+}, [cardPositions, parents, egoId]);
+
+// 4. Render lines
+<TreeConnections connections={connections} />
+```
+
+### **Challenges to Address**
+
+1. **Dynamic Layout**: Cards can move (pan/zoom, scroll)
+   - **Solution**: Re-measure on layout changes, use `onLayout`
+
+2. **Performance**: Many lines = many SVG elements
+   - **Solution**: Memoize connections, use `React.memo` for SVG components
+
+3. **Z-Index**: Lines behind cards but above background
+   - **Solution**: Layer SVG between background and cards
+
+4. **Curved Lines**: Better UX than straight lines
+   - **Solution**: Use SVG `Path` with bezier curves for parent-child connections
 
 ---
 
-*Last Updated: After @Mention Tagging Implementation*
+## 7. Onboarding & Auth Flow Approach
 
+### **Recommended Sequence**
+
+#### **Step 1: Frontend-Only Onboarding (No Backend)**
+1. **Create onboarding screens** (Welcome → Create Profile → Done)
+2. **Store ego locally** (Zustand + AsyncStorage)
+3. **Mock auth state** (local boolean: `isAuthenticated`)
+4. **Test full flow** end-to-end
+
+**Why**: Validate UX before backend complexity
+
+#### **Step 2: Add Auth Context**
+1. **Create `AuthContext`** with:
+   - `user: User | null`
+   - `isAuthenticated: boolean`
+   - `login(email, password)`
+   - `logout()`
+   - `signup(email, password, name)`
+2. **Protect routes** in `_layout.tsx`
+3. **Redirect logic** (onboarding → app, or login → app)
+
+**Why**: Clean separation, easy to swap implementations
+
+#### **Step 3: Backend Integration**
+1. **Design API contracts** (REST endpoints)
+2. **Create API service layer** (`services/api.ts`)
+3. **Add auth endpoints**:
+   - `POST /auth/signup`
+   - `POST /auth/login`
+   - `POST /auth/refresh`
+   - `GET /auth/me`
+4. **Add token management** (store in SecureStore)
+5. **Add API client** (axios/fetch with interceptors)
+
+**Why**: Incremental, testable, maintainable
+
+### **Onboarding Flow Design**
+
+```
+┌─────────────┐
+│   Welcome   │ → "Get Started"
+└─────────────┘
+      ↓
+┌─────────────┐
+│ Create Self │ → Name, Birth Date, Gender, Photo
+└─────────────┘
+      ↓
+┌─────────────┐
+│ Join/Create │ → "Join Family" or "Create New Family"
+│   Family    │   (Phone number for invites)
+└─────────────┘
+      ↓
+┌─────────────┐
+│     App     │ → Initialize ego, redirect to home
+└─────────────┘
+```
+
+### **Auth Flow Design**
+
+```
+App Start
+    ↓
+Check Auth State (SecureStore)
+    ↓
+┌──────────┐      ┌──────────────┐
+│ Logged   │      │ Not Logged   │
+│   In     │      │     In       │
+└──────────┘      └──────────────┘
+    ↓                   ↓
+  App              Login Screen
+                      ↓
+              ┌──────────────┐
+              │ Sign Up /    │
+              │ Sign In      │
+              └──────────────┘
+                      ↓
+              ┌──────────────┐
+              │ Onboarding   │
+              │   (if new)   │
+              └──────────────┘
+                      ↓
+                    App
+```
+
+### **Backend API Design (Future)**
+
+#### **Auth Endpoints**
+```
+POST   /api/auth/signup
+POST   /api/auth/login
+POST   /api/auth/refresh
+GET    /api/auth/me
+POST   /api/auth/logout
+```
+
+#### **Family Tree Endpoints**
+```
+GET    /api/family-tree          # Get full tree
+POST   /api/family-tree/person   # Add person
+PUT    /api/family-tree/person/:id
+DELETE /api/family-tree/person/:id
+POST   /api/family-tree/relationship
+```
+
+#### **Invite Endpoints**
+```
+POST   /api/invites              # Send invite
+GET    /api/invites/:token       # Validate invite
+POST   /api/invites/:token/accept
+```
+
+### **Implementation Priority**
+
+1. ✅ **Frontend onboarding** (no backend)
+2. ✅ **Auth context** (mock auth)
+3. ⏭️ **Backend API design** (document endpoints)
+4. ⏭️ **API integration** (connect frontend to backend)
+5. ⏭️ **Real-time sync** (WebSockets/Firebase)
+
+---
+
+## 8. Recommendations Summary
+
+### **Immediate (Before Backend)**
+1. ✅ Extract large components into hooks
+2. ✅ Add form validation library
+3. ✅ Add error handling improvements
+4. ✅ Add basic tests
+5. ✅ Implement connection lines (SVG approach)
+
+### **Short-term (With Backend)**
+1. ⏭️ Create API service layer
+2. ⏭️ Add auth context + onboarding
+3. ⏭️ Add AsyncStorage persistence
+4. ⏭️ Add DAG validation utils
+
+### **Medium-term**
+1. ⏭️ Real-time sync (Firebase/Supabase)
+2. ⏭️ Conflict resolution UI
+3. ⏭️ Performance optimizations
+4. ⏭️ Advanced tree layout algorithms
+
+---
+
+## 9. Conclusion
+
+### **Strengths**
+- ✅ Solid architecture foundation
+- ✅ Good separation of types/store/components
+- ✅ Clean component structure
+- ✅ Type-safe throughout
+- ✅ Mobile-first approach
+
+### **Areas for Growth**
+- ⚠️ Extract logic from large components
+- ⚠️ Add testing infrastructure
+- ⚠️ Improve error handling
+- ⚠️ Add service layer abstraction
+- ⚠️ Implement connection lines properly
+
+### **Next Steps**
+1. **Frontend polish**: Extract hooks, add tests
+2. **Onboarding flow**: Build screens, mock auth
+3. **Backend design**: Document API contracts
+4. **Backend integration**: Connect frontend to APIs
+5. **Real-time sync**: Add collaboration features
+
+**Overall Assessment**: 🟢 **Good foundation, ready for backend integration**

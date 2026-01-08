@@ -19,7 +19,7 @@ interface FamilyTreeStore {
   egoId: string | null;
   
   /** Initialize the ego (focal person) */
-  initializeEgo: (name: string, birthDate?: string, gender?: Person['gender']) => void;
+  initializeEgo: (name: string, birthDate?: string, gender?: Person['gender'], userId?: string) => void;
   
   /** Update ego's profile information */
   updateEgo: (updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>) => void;
@@ -29,6 +29,9 @@ interface FamilyTreeStore {
   
   /** Get the ego person */
   getEgo: () => Person | null;
+  
+  /** Clear ego and reset store (for sign out) */
+  clearEgo: () => void;
   
   /** Count all ancestors (recursive parent traversal) */
   countAncestors: (personId: string) => number;
@@ -87,7 +90,7 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
   updates: new Map(),
   egoId: null,
 
-  initializeEgo: (name, birthDate, gender) => {
+  initializeEgo: (name, birthDate, gender, userId) => {
     const id = uuidv4();
     const now = Date.now();
     
@@ -103,6 +106,8 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       createdAt: now,
       updatedAt: now,
       version: 1,
+      createdBy: userId,
+      updatedBy: userId,
     };
 
     const newPeople = new Map(get().people);
@@ -143,6 +148,14 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     const { egoId, people } = get();
     if (!egoId) return null;
     return people.get(egoId) || null;
+  },
+
+  clearEgo: () => {
+    set({
+      egoId: null,
+      people: new Map(),
+      updates: new Map(),
+    });
   },
 
   countAncestors: (personId) => {

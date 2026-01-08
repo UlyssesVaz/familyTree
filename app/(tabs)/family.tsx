@@ -13,7 +13,7 @@ import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
 import type { Update, Person } from '@/types/family-tree';
 
-export default function ExploreScreen() {
+export default function FamilyScreen() {
   const insets = useSafeAreaInsets();
   const [isAddingUpdate, setIsAddingUpdate] = useState(false);
   const [updateToEdit, setUpdateToEdit] = useState<Update | null>(null);
@@ -549,3 +549,4 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
 });
+

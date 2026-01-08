@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, TouchableOpacity, View, Modal, Alert, Platform } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, TouchableOpacity, View, Modal, Alert, Platform, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { AddUpdateModal, EditProfileModal } from '@/components/family-tree';
 import { useColorSchemeContext } from '@/contexts/color-scheme-context';
@@ -13,10 +13,13 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
+import { useAuth } from '@/contexts/auth-context';
+import { locationService, LocationData } from '@/services/location-service';
 import type { Gender, Update, Person } from '@/types/family-tree';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const params = useLocalSearchParams<{ addUpdate?: string }>();
   const [isEditing, setIsEditing] = useState(false);
   const [isAddingUpdate, setIsAddingUpdate] = useState(false);
@@ -24,10 +27,15 @@ export default function ProfileScreen() {
   const [expandedUpdateId, setExpandedUpdateId] = useState<string | null>(null);
   const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [location, setLocation] = useState<LocationData | null>(null);
+  const [isLoadingLocation, setIsLoadingLocation] = useState(false);
+  const [showLocationInput, setShowLocationInput] = useState(false);
+  const [manualLocationText, setManualLocationText] = useState('');
   const { colorScheme, setColorScheme } = useColorSchemeContext();
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
+  const { signOut } = useAuth();
   
   const ego = useFamilyTreeStore((state) => state.getEgo());
   const egoId = useFamilyTreeStore((state) => state.egoId);
@@ -65,6 +73,112 @@ export default function ProfileScreen() {
     setColorScheme(newScheme);
   };
 
+  // Extract location from bio if present
+  useEffect(() => {
+    if (person?.bio) {
+      // Look for location pattern: 📍 Address (can be on same line or next line)
+      const locationMatch = person.bio.match(/📍\s*([^\n]+)/);
+      if (locationMatch) {
+        // Location is in bio, extract it
+        const locationText = locationMatch[1].trim();
+        // Set location state
+        setLocation({ formattedAddress: locationText } as LocationData);
+      } else {
+        // No location found in bio
+        setLocation(null);
+      }
+    } else {
+      setLocation(null);
+    }
+  }, [person?.bio]);
+
+  // Request location if not available
+  const handleRequestLocation = async () => {
+    setIsLoadingLocation(true);
+    try {
+      const locationData = await locationService.getCurrentLocation();
+      if (locationData?.formattedAddress) {
+        setLocation(locationData);
+        // Update bio with location
+        const currentBio = person?.bio || '';
+        const locationText = `📍 ${locationData.formattedAddress}`;
+        // Remove old location if exists
+        const bioWithoutLocation = currentBio.replace(/📍\s*[^\n]+/g, '').trim();
+        const newBio = bioWithoutLocation ? `${bioWithoutLocation}\n\n${locationText}` : locationText;
+        updateEgo({ bio: newBio });
+      } else {
+        // Location permission denied or failed - offer manual input
+        Alert.alert(
+          'Location Not Available',
+          'We couldn\'t access your device location. Would you like to enter it manually?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Enter Manually', onPress: () => setShowLocationInput(true) },
+          ]
+        );
+      }
+    } catch (error) {
+      console.error('Error getting location:', error);
+      // Offer manual input on error
+      Alert.alert(
+        'Location Error',
+        'We couldn\'t get your location. Would you like to enter it manually?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Enter Manually', onPress: () => setShowLocationInput(true) },
+        ]
+      );
+    } finally {
+      setIsLoadingLocation(false);
+    }
+  };
+
+  const handleSaveManualLocation = () => {
+    if (!manualLocationText.trim()) {
+      Alert.alert('Required', 'Please enter a location');
+      return;
+    }
+
+    const locationData: LocationData = {
+      formattedAddress: manualLocationText.trim(),
+    } as LocationData;
+    
+    setLocation(locationData);
+    // Update bio with location
+    const currentBio = person?.bio || '';
+    const locationText = `📍 ${manualLocationText.trim()}`;
+    // Remove old location if exists
+    const bioWithoutLocation = currentBio.replace(/📍\s*[^\n]+/g, '').trim();
+    const newBio = bioWithoutLocation ? `${bioWithoutLocation}\n\n${locationText}` : locationText;
+    updateEgo({ bio: newBio });
+    
+    setShowLocationInput(false);
+    setManualLocationText('');
+  };
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await signOut();
+            } catch (error) {
+              // Only show error if sign out actually failed (not just navigation)
+              console.error('Sign out error:', error);
+              // Don't show alert - sign out likely succeeded, just navigation might have failed
+            }
+          },
+        },
+      ]
+    );
+  };
+
   // Check if we should open Add Update modal from navigation params
   useEffect(() => {
     if (params.addUpdate === 'true') {
@@ -75,15 +189,9 @@ export default function ProfileScreen() {
   // Show delete alert after menu modal closes
   // Using ref and delay to avoid iOS Alert timing issues
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:57',message:'useEffect triggered',data:{pendingDeleteId,menuUpdateId,condition:!!(pendingDeleteId && !menuUpdateId)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     if (pendingDeleteId && !menuUpdateId) {
       // Menu has closed, wait for animation to complete then show alert
       const updateIdToDelete = pendingDeleteId;
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:60',message:'Condition met, preparing alert',data:{updateIdToDelete},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
       
       // Clear pending state immediately to prevent re-triggering
       setPendingDeleteId(null);
@@ -92,33 +200,13 @@ export default function ProfileScreen() {
       // This is necessary on iOS where Alert can fail if called too soon after Modal dismissal
       requestAnimationFrame(() => {
         setTimeout(() => {
-          // #region agent log
-          fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:74',message:'Preparing confirmation dialog',data:{updateIdToDelete,platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'B'})}).catch(()=>{});
-          // #endregion
-          
           // On web, Alert.alert callbacks may not fire reliably - use window.confirm as fallback
           if (Platform.OS === 'web') {
-            // #region agent log
-            fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:77',message:'Using window.confirm for web',data:{updateIdToDelete},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'C'})}).catch(()=>{});
-            // #endregion
             const confirmed = window.confirm('Are you sure you want to delete this update?');
-            // #region agent log
-            fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:80',message:'window.confirm result',data:{updateIdToDelete,confirmed},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'C'})}).catch(()=>{});
-            // #endregion
             if (confirmed) {
-              // #region agent log
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:83',message:'Web confirm Delete confirmed',data:{updateIdToDelete},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'C'})}).catch(()=>{});
-              // #endregion
               deleteUpdateRef.current(updateIdToDelete);
-            } else {
-              // #region agent log
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:87',message:'Web confirm Cancel',data:{updateIdToDelete},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'C'})}).catch(()=>{});
-              // #endregion
             }
           } else {
-            // #region agent log
-            fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:91',message:'Using Alert.alert for native',data:{updateIdToDelete,platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'B'})}).catch(()=>{});
-            // #endregion
             Alert.alert(
               'Delete Update',
               'Are you sure you want to delete this update?',
@@ -126,22 +214,12 @@ export default function ProfileScreen() {
                 {
                   text: 'Cancel',
                   style: 'cancel',
-                  onPress: () => {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:99',message:'Alert Cancel pressed',data:{updateIdToDelete},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'C'})}).catch(()=>{});
-                    // #endregion
-                  },
                 },
                 {
                   text: 'Delete',
                   style: 'destructive',
                   onPress: () => {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:107',message:'Alert Delete confirmed',data:{updateIdToDelete},timestamp:Date.now(),sessionId:'debug-session',runId:'run3',hypothesisId:'C'})}).catch(()=>{});
-                    // #endregion
-                    console.log('Delete confirmed for update:', updateIdToDelete);
                     deleteUpdateRef.current(updateIdToDelete);
-                    console.log('Delete function called');
                   },
                 },
               ]
@@ -261,6 +339,17 @@ export default function ProfileScreen() {
             >
               <ThemedText style={styles.editButtonText}>Edit Profile</ThemedText>
             </Pressable>
+            <Pressable
+              onPress={handleLogout}
+              style={({ pressed }) => [
+                styles.logoutButton,
+                { borderColor: colors.icon },
+                pressed && styles.editButtonPressed,
+              ]}
+            >
+              <MaterialIcons name="logout" size={16} color={colors.icon} />
+              <ThemedText style={[styles.editButtonText, { marginLeft: 6 }]}>Sign Out</ThemedText>
+            </Pressable>
           </View>
         )}
 
@@ -269,9 +358,48 @@ export default function ProfileScreen() {
           <ThemedText type="defaultSemiBold" style={styles.displayName}>
             {person.name}
           </ThemedText>
-          {person.bio && (
-            <ThemedText style={styles.bio}>{person.bio}</ThemedText>
+          
+          {/* Location Display */}
+          {isEgo && (
+            <View style={styles.locationContainer}>
+              {location?.formattedAddress ? (
+                <View style={styles.locationRow}>
+                  <MaterialIcons name="location-on" size={16} color={colors.icon} />
+                  <ThemedText style={[styles.locationText, { color: colors.icon }]}>
+                    {location.formattedAddress}
+                  </ThemedText>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={handleRequestLocation}
+                  disabled={isLoadingLocation}
+                  style={styles.locationRequestButton}
+                >
+                  {isLoadingLocation ? (
+                    <ThemedText style={[styles.locationText, { color: colors.icon, opacity: 0.6 }]}>
+                      Loading location...
+                    </ThemedText>
+                  ) : (
+                    <>
+                      <MaterialIcons name="location-on" size={16} color={colors.tint} />
+                      <ThemedText style={[styles.locationText, { color: colors.tint }]}>
+                        Add location
+                      </ThemedText>
+                    </>
+                  )}
+                </Pressable>
+              )}
+            </View>
           )}
+          
+          {/* Bio without location */}
+          {person.bio && (() => {
+            // Remove location from bio display (it's shown separately above)
+            const bioWithoutLocation = person.bio.replace(/📍\s*[^\n]+/g, '').trim();
+            return bioWithoutLocation ? (
+              <ThemedText style={styles.bio}>{bioWithoutLocation}</ThemedText>
+            ) : null;
+          })()}
         </View>
 
         {/* Updates Section */}
@@ -466,9 +594,6 @@ export default function ProfileScreen() {
                               <>
                                 <Pressable
                                   onPress={(e) => {
-                                    // #region agent log
-                                    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:333',message:'Privacy toggle pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                    // #endregion
                                     e.stopPropagation();
                                     toggleUpdatePrivacy(update.id);
                                     setMenuUpdateId(null);
@@ -486,9 +611,6 @@ export default function ProfileScreen() {
                                 </Pressable>
                                 <Pressable
                                   onPress={(e) => {
-                                    // #region agent log
-                                    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:349',message:'Edit button pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                    // #endregion
                                     e.stopPropagation();
                                     setUpdateToEdit(update);
                                     setMenuUpdateId(null);
@@ -506,17 +628,11 @@ export default function ProfileScreen() {
                             {isOwnUpdate && (
                               <Pressable
                                 onPress={(e) => {
-                                  // #region agent log
-                                  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:360',message:'Delete button pressed',data:{updateId:update.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                  // #endregion
                                   e.stopPropagation();
                                   // Set pending delete and close menu
                                   // useEffect will handle showing alert after modal closes
                                   setPendingDeleteId(update.id);
                                   setMenuUpdateId(null);
-                                  // #region agent log
-                                  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:366',message:'State set for delete',data:{pendingDeleteId:update.id,menuUpdateId:'null'},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'A'})}).catch(()=>{});
-                                  // #endregion
                                 }}
                                 style={styles.menuItem}
                               >
@@ -563,6 +679,71 @@ export default function ProfileScreen() {
             onClose={() => setIsEditing(false)}
             onSave={updateEgo}
           />
+          {/* Manual Location Input Modal */}
+          <Modal
+            visible={showLocationInput}
+            transparent={true}
+            animationType="slide"
+            onRequestClose={() => setShowLocationInput(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <ThemedView style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <ThemedText type="defaultSemiBold" style={styles.modalTitle}>
+                    Enter Location
+                  </ThemedText>
+                  <Pressable onPress={() => setShowLocationInput(false)}>
+                    <MaterialIcons name="close" size={24} color={colors.icon} />
+                  </Pressable>
+                </View>
+                
+                <ThemedText style={[styles.modalDescription, { color: colors.icon }]}>
+                  Enter your location (e.g., City, State or full address)
+                </ThemedText>
+                
+                <TextInput
+                  style={[
+                    styles.locationInput,
+                    {
+                      backgroundColor: colors.background,
+                      borderColor: colors.icon,
+                      color: colors.text,
+                    },
+                  ]}
+                  placeholder="Enter location..."
+                  placeholderTextColor={colors.icon}
+                  value={manualLocationText}
+                  onChangeText={setManualLocationText}
+                  autoFocus
+                />
+                
+                <View style={styles.modalActions}>
+                  <Pressable
+                    onPress={() => {
+                      setShowLocationInput(false);
+                      setManualLocationText('');
+                    }}
+                    style={[styles.modalButton, styles.modalButtonCancel]}
+                  >
+                    <ThemedText style={styles.modalButtonText}>Cancel</ThemedText>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleSaveManualLocation}
+                    style={[
+                      styles.modalButton,
+                      styles.modalButtonSave,
+                      { backgroundColor: colors.tint },
+                    ]}
+                  >
+                    <ThemedText style={[styles.modalButtonText, { color: '#FFFFFF' }]}>
+                      Save
+                    </ThemedText>
+                  </Pressable>
+                </View>
+              </ThemedView>
+            </View>
+          </Modal>
+
           <AddUpdateModal
             visible={isAddingUpdate}
             onClose={() => {
@@ -647,13 +828,26 @@ const styles = StyleSheet.create({
   },
   editButtonRow: {
     marginBottom: 16,
+    flexDirection: 'row',
+    gap: 12,
   },
   editButton: {
+    flex: 1,
     borderWidth: 1,
     borderRadius: 8,
     paddingVertical: 8,
     paddingHorizontal: 16,
     alignItems: 'center',
+  },
+  logoutButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   editButtonPressed: {
     opacity: 0.7,
@@ -661,6 +855,24 @@ const styles = StyleSheet.create({
   editButtonText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  locationContainer: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  locationText: {
+    fontSize: 14,
+    opacity: 0.8,
+  },
+  locationRequestButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   infoSection: {
     marginBottom: 24,
@@ -858,5 +1070,57 @@ const styles = StyleSheet.create({
   },
   updateAuthor: {
     fontSize: 12,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+  },
+  modalDescription: {
+    fontSize: 14,
+    marginBottom: 16,
+    opacity: 0.7,
+  },
+  locationInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 20,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalButtonCancel: {
+    borderWidth: 1,
+  },
+  modalButtonSave: {
+    // backgroundColor set inline
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
