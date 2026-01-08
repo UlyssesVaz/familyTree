@@ -71,7 +71,7 @@ export default function WelcomeScreen() {
             },
           ]}
         >
-          <ThemedText style={styles.continueButtonText}>Get Started</ThemedText>
+          <ThemedText style={[styles.continueButtonText, { color: '#FFFFFF' }]}>Get Started</ThemedText>
           <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
         </Pressable>
       </View>
@@ -134,9 +134,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   continueButtonText: {
-    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+    // Color is set inline to ensure white text on colored background
   },
 });
 

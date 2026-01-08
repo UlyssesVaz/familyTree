@@ -9,6 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFamilyFeed, type FeedFilter } from '@/hooks/use-family-feed';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
 import type { Update, Person } from '@/types/family-tree';
@@ -29,29 +30,13 @@ export default function FamilyScreen() {
   const egoId = useFamilyTreeStore((state) => state.egoId);
   const people = useFamilyTreeStore((state) => state.people);
   const peopleArray = Array.from(people.values());
-  const updatesMap = useFamilyTreeStore((state) => state.updates);
-  const getPerson = useFamilyTreeStore((state) => state.getPerson);
   const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
   const deleteUpdate = useFamilyTreeStore((state) => state.deleteUpdate);
   const updateUpdate = useFamilyTreeStore((state) => state.updateUpdate);
   const toggleUpdatePrivacy = useFamilyTreeStore((state) => state.toggleUpdatePrivacy);
 
-  // Get all updates from all family members, sorted by date (newest first)
-  let allFamilyUpdates = Array.from(updatesMap.values())
-    .map(update => ({
-      update,
-      person: getPerson(update.personId),
-      taggedPeople: (update.taggedPersonIds || []).map(id => getPerson(id)).filter(Boolean) as Person[],
-    }))
-    .filter(({ person }) => person !== undefined)
-    .sort((a, b) => b.update.createdAt - a.update.createdAt);
-
-  // Apply filter: "group" = 4+ tagged people
-  if (filter === 'group') {
-    allFamilyUpdates = allFamilyUpdates.filter(
-      ({ taggedPeople }) => taggedPeople.length >= 4
-    );
-  }
+  // Use custom hook to get filtered family feed updates
+  const { updates: allFamilyUpdates } = useFamilyFeed(filter as FeedFilter);
 
   // Use ref to avoid stale closure in useEffect
   const deleteUpdateRef = useRef(deleteUpdate);

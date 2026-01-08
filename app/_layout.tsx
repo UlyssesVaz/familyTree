@@ -14,6 +14,8 @@ import 'react-native-reanimated';
 
 import { ColorSchemeProvider, useColorSchemeContext } from '@/contexts/color-scheme-context';
 import { AuthProvider } from '@/contexts/auth-context';
+import { ErrorProvider } from '@/contexts/error-context';
+import { ModalProvider } from '@/contexts/modal-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // No default route - let routing guard handle navigation
@@ -41,9 +43,13 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ErrorBoundary>
           <ColorSchemeProvider>
-            <AuthProvider>
-              <RootLayoutNav />
-            </AuthProvider>
+            <ErrorProvider>
+              <ModalProvider>
+                <AuthProvider>
+                  <RootLayoutNav />
+                </AuthProvider>
+              </ModalProvider>
+            </ErrorProvider>
           </ColorSchemeProvider>
         </ErrorBoundary>
       </SafeAreaProvider>

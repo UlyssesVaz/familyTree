@@ -9,6 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useProfileUpdates } from '@/hooks/use-profile-updates';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { AddUpdateModal } from '@/components/family-tree';
@@ -22,19 +23,19 @@ export default function PersonProfileModal() {
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
   
+  const personId = params.personId;
+  
   const egoId = useFamilyTreeStore((state) => state.egoId);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
-  const getUpdateCount = useFamilyTreeStore((state) => state.getUpdateCount);
-  const getUpdatesForPerson = useFamilyTreeStore((state) => state.getUpdatesForPerson);
   const countAncestors = useFamilyTreeStore((state) => state.countAncestors);
   const countDescendants = useFamilyTreeStore((state) => state.countDescendants);
   const toggleTaggedUpdateVisibility = useFamilyTreeStore((state) => state.toggleTaggedUpdateVisibility);
   const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
   const people = useFamilyTreeStore((state) => state.people);
-  const updates = useFamilyTreeStore((state) => state.updates); // Subscribe to updates Map for re-renders
   const peopleArray = Array.from(people.values());
   
-  const personId = params.personId;
+  // Use custom hook to get updates for this person (must be called after personId is defined)
+  const { updates: personUpdates, updateCount } = useProfileUpdates(personId);
   const person: Person | null = personId ? getPerson(personId) || null : null;
   const isEgo = personId === egoId;
 
@@ -100,8 +101,6 @@ export default function PersonProfileModal() {
 
   const ancestorsCount = countAncestors(person.id);
   const descendantsCount = countDescendants(person.id);
-  const updatesCount = getUpdateCount(person.id);
-  const personUpdates = getUpdatesForPerson(person.id);
 
   // Gender-based colors for photo placeholder
   const getGenderColor = (gender?: Gender): string => {
@@ -165,7 +164,7 @@ export default function PersonProfileModal() {
             <View style={styles.statsContainer}>
               <View style={styles.statItem}>
                 <ThemedText type="defaultSemiBold" style={styles.statNumber}>
-                  {updatesCount}
+                  {updateCount}
                 </ThemedText>
                 <ThemedText style={styles.statLabel}>updates</ThemedText>
               </View>

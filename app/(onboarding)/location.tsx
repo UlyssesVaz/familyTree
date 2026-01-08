@@ -136,7 +136,7 @@ export default function LocationSetupScreen() {
               },
             ]}
           >
-            <ThemedText style={styles.continueButtonText}>
+            <ThemedText style={[styles.continueButtonText, { color: '#FFFFFF' }]}>
               {location ? 'Continue' : 'Skip for Now'}
             </ThemedText>
             <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
@@ -258,9 +258,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   continueButtonText: {
-    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+    // Color is set inline to ensure white text on colored background
   },
   skipButton: {
     paddingVertical: 12,

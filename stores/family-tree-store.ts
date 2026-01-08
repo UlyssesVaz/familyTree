@@ -221,7 +221,8 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       createdAt: now,
     };
 
-    const newUpdates = new Map(get().updates);
+    const oldUpdates = get().updates;
+    const newUpdates = new Map(oldUpdates);
     newUpdates.set(id, update);
 
     set({ updates: newUpdates });
@@ -295,9 +296,8 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
   },
 
   getUpdateCount: (personId) => {
-    const { updates } = get();
-    return Array.from(updates.values())
-      .filter(update => update.personId === personId).length;
+    // Use getUpdatesForPerson to get accurate count (includes own updates + tagged updates)
+    return get().getUpdatesForPerson(personId).length;
   },
 
   toggleUpdatePrivacy: (updateId) => {
@@ -317,35 +317,18 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
   },
 
   deleteUpdate: (updateId) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:238',message:'deleteUpdate called',data:{updateId,updatesSize:get().updates.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     const { updates } = get();
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:240',message:'Before deletion check',data:{updateId,hasUpdate:updates.has(updateId),updatesSize:updates.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     if (!updates.has(updateId)) {
       console.warn(`Update ${updateId} not found for deletion`);
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:242',message:'Update not found, aborting',data:{updateId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
       return;
     }
     
     // Create new Map without the deleted update
     const newUpdates = new Map(updates);
     newUpdates.delete(updateId);
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:247',message:'Before set() call',data:{updateId,oldSize:updates.size,newSize:newUpdates.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     
     // Force Zustand to recognize the change by creating a completely new Map
     set({ updates: new Map(newUpdates) });
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:250',message:'After set() call',data:{updateId,remainingUpdates:newUpdates.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
-    
-    console.log(`Deleted update ${updateId}. Remaining updates: ${newUpdates.size}`);
   },
 
   toggleTaggedUpdateVisibility: (personId, updateId) => {

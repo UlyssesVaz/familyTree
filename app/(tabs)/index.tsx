@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View, Platform, Alert, ScrollView, Dimensions, Share } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -15,6 +15,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useTreeLayout } from '@/hooks/use-tree-layout';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import type { Gender, Person } from '@/types/family-tree';
 
@@ -171,19 +172,12 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const egoId = useFamilyTreeStore((state) => state.egoId);
-  // Subscribe to people Map - Zustand will trigger re-render when Map reference changes
-  const people = useFamilyTreeStore((state) => state.people);
-  const getPerson = useFamilyTreeStore((state) => state.getPerson);
-  const getSiblings = useFamilyTreeStore((state) => state.getSiblings);
   const initializeEgo = useFamilyTreeStore((state) => state.initializeEgo);
   
-  // Get ego directly from people Map - this ensures we get updates when ego changes
-  // Also subscribe to people.size to ensure updates trigger recalculation
-  const peopleSize = useFamilyTreeStore((state) => state.people.size);
-  const ego = useMemo(() => {
-    if (!egoId) return null;
-    return people.get(egoId) || null;
-  }, [egoId, people, peopleSize]);
+  // Use the custom hook to get all tree layout calculations
+  // This hook encapsulates all the complex tree traversal logic
+  const { ancestorGenerations, descendantGenerations, spouses, siblings, ego } = useTreeLayout(egoId);
+  
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
@@ -192,190 +186,6 @@ export default function HomeScreen() {
   const [showAddPersonModal, setShowAddPersonModal] = useState(false);
   const [selectedRelativeType, setSelectedRelativeType] = useState<RelativeType | null>(null);
   const [selectedPerson, setSelectedPerson] = useState<Person | null>(null); // Track which person we're adding to
-
-  // Convert people Map to array for dependency tracking
-  // Include peopleSize to ensure updates trigger recalculation when people are added
-  const peopleArray = useMemo(() => {
-    const arr = Array.from(people.values());
-    if (__DEV__) {
-      console.log(`[Tree] peopleArray recalculated, size: ${arr.length}, people.size: ${people.size}`);
-    }
-    return arr;
-  }, [people, peopleSize]);
-
-  // Recursively get all ancestor generations (parents, grandparents, etc.)
-  // Includes siblings of each person in each generation
-  const getAllAncestorGenerations = useMemo(() => {
-    if (!ego) {
-      if (__DEV__) {
-        console.log(`[Tree] getAllAncestorGenerations: No ego`);
-      }
-      return [];
-    }
-    
-    if (__DEV__) {
-      console.log(`[Tree] getAllAncestorGenerations: Starting calculation, ego: ${ego.name}, people.size: ${peopleSize}`);
-    }
-    
-    const generations: Person[][] = [];
-    const visited = new Set<string>();
-    
-    // Helper function to expand a generation to include all siblings
-    const expandGenerationWithSiblings = (baseGeneration: Person[]): Person[] => {
-      const expanded = new Map<string, Person>();
-      
-      // Add all base people
-      for (const person of baseGeneration) {
-        expanded.set(person.id, person);
-        visited.add(person.id);
-      }
-      
-      // For each person, add their siblings
-      for (const person of baseGeneration) {
-        const siblings = getSiblings(person.id);
-        for (const sibling of siblings) {
-          if (!visited.has(sibling.id) && !expanded.has(sibling.id)) {
-            expanded.set(sibling.id, sibling);
-            visited.add(sibling.id);
-          }
-        }
-      }
-      
-      return Array.from(expanded.values());
-    };
-    
-    // Start with ego's parents (generation 0) and expand with siblings
-    let currentGeneration = expandGenerationWithSiblings(
-      ego.parentIds
-        .map((id) => getPerson(id))
-        .filter((p): p is NonNullable<typeof p> => p !== undefined)
-    );
-    
-    // Keep going up generations until no more parents
-    while (currentGeneration.length > 0) {
-      // Add current generation (with siblings)
-      generations.push(currentGeneration);
-      
-      // Get next generation (parents of current generation, including siblings)
-      const nextGenerationBase: Person[] = [];
-      const nextGenIds = new Set<string>();
-      
-      for (const person of currentGeneration) {
-        for (const parentId of person.parentIds) {
-          if (!visited.has(parentId) && !nextGenIds.has(parentId)) {
-            const parent = getPerson(parentId);
-            if (parent) {
-              nextGenerationBase.push(parent);
-              nextGenIds.add(parentId);
-            }
-          }
-        }
-      }
-      
-      // Expand next generation with siblings
-      currentGeneration = expandGenerationWithSiblings(nextGenerationBase);
-    }
-    
-    const result = generations.reverse(); // Reverse so oldest generation is first
-    
-    if (__DEV__) {
-      console.log(`[Tree] getAllAncestorGenerations: Calculated ${result.length} generations`);
-      result.forEach((gen, idx) => {
-        console.log(`[Tree]   Generation ${idx}: ${gen.length} people - ${gen.map(p => p.name).join(', ')}`);
-      });
-    }
-    
-    return result;
-  }, [ego, ego?.id, people, people.size, peopleArray, getPerson, getSiblings]); // Include size to trigger recalculation
-
-  // Recursively get all descendant generations (children, grandchildren, etc.)
-  // Includes siblings of each person in each generation
-  const getAllDescendantGenerations = useMemo(() => {
-    if (!ego) return [];
-    
-    const generations: Person[][] = [];
-    const visited = new Set<string>();
-    
-    // Helper function to expand a generation to include all siblings
-    const expandGenerationWithSiblings = (baseGeneration: Person[]): Person[] => {
-      const expanded = new Map<string, Person>();
-      
-      // Add all base people
-      for (const person of baseGeneration) {
-        expanded.set(person.id, person);
-        visited.add(person.id);
-      }
-      
-      // For each person, add their siblings
-      for (const person of baseGeneration) {
-        const siblings = getSiblings(person.id);
-        for (const sibling of siblings) {
-          if (!visited.has(sibling.id) && !expanded.has(sibling.id)) {
-            expanded.set(sibling.id, sibling);
-            visited.add(sibling.id);
-          }
-        }
-      }
-      
-      return Array.from(expanded.values());
-    };
-    
-    // Start with ego's children (generation 0) and expand with siblings
-    let currentGeneration = expandGenerationWithSiblings(
-      ego.childIds
-        .map((id) => getPerson(id))
-        .filter((p): p is NonNullable<typeof p> => p !== undefined)
-    );
-    
-    // Keep going down generations until no more children
-    while (currentGeneration.length > 0) {
-      // Add current generation (with siblings)
-      generations.push(currentGeneration);
-      
-      // Get next generation (children of current generation, including siblings)
-      const nextGenerationBase: Person[] = [];
-      const nextGenIds = new Set<string>();
-      
-      for (const person of currentGeneration) {
-        for (const childId of person.childIds) {
-          if (!visited.has(childId) && !nextGenIds.has(childId)) {
-            const child = getPerson(childId);
-            if (child) {
-              nextGenerationBase.push(child);
-              nextGenIds.add(childId);
-            }
-          }
-        }
-      }
-      
-      // Expand next generation with siblings
-      currentGeneration = expandGenerationWithSiblings(nextGenerationBase);
-    }
-    
-    if (__DEV__) {
-      console.log(`[Tree] getAllDescendantGenerations: Calculated ${generations.length} generations`);
-      generations.forEach((gen, idx) => {
-        console.log(`[Tree]   Generation ${idx}: ${gen.length} people - ${gen.map(p => p.name).join(', ')}`);
-      });
-    }
-    
-    return generations;
-  }, [ego, ego?.id, people, peopleSize, peopleArray, getPerson, getSiblings]); // Use peopleSize to trigger recalculation
-
-  // Get ego's immediate relationships (for ego row)
-  const { spouses, siblings } = useMemo(() => {
-    if (!ego) {
-      return { spouses: [], siblings: [] };
-    }
-
-    const spouses = ego.spouseIds
-      .map((id) => getPerson(id))
-      .filter((p): p is NonNullable<typeof p> => p !== undefined);
-
-    const siblings = getSiblings(ego.id);
-
-    return { spouses, siblings };
-  }, [ego, people, getPerson, getSiblings]);
 
   // Temporary: Initialize ego if it doesn't exist (for testing)
   // TODO: Replace with onboarding flow later
@@ -530,7 +340,7 @@ export default function HomeScreen() {
       <InfiniteCanvas>
         <ThemedView style={[styles.treeContainer, { paddingTop: contentPaddingTop }]}>
           {/* Ancestor Generations (Above Ego) - Recursively display all parent generations */}
-          {getAllAncestorGenerations.map((generation, index) => (
+          {ancestorGenerations.map((generation, index) => (
             <View key={`ancestor-gen-${index}`} style={styles.generationSection}>
               <GenerationRow 
                 people={generation}
@@ -552,7 +362,7 @@ export default function HomeScreen() {
           />
 
           {/* Descendant Generations (Below Ego) - Recursively display all child generations */}
-          {getAllDescendantGenerations.map((generation, index) => (
+          {descendantGenerations.map((generation, index) => (
             <View key={`descendant-gen-${index}`} style={styles.generationSection}>
               <GenerationRow 
                 people={generation}
@@ -563,7 +373,7 @@ export default function HomeScreen() {
           ))}
 
           {/* Empty State */}
-          {getAllAncestorGenerations.length === 0 && spouses.length === 0 && getAllDescendantGenerations.length === 0 && siblings.length === 0 && (
+          {ancestorGenerations.length === 0 && spouses.length === 0 && descendantGenerations.length === 0 && siblings.length === 0 && (
             <View style={styles.emptyState}>
               <ThemedText style={styles.emptyStateText}>
                 Tap the + button to add relatives to your family tree

@@ -11,6 +11,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useProfileUpdates } from '@/hooks/use-profile-updates';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { useAuth } from '@/contexts/auth-context';
@@ -53,14 +54,12 @@ export default function ProfileScreen() {
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
   const toggleTaggedUpdateVisibility = useFamilyTreeStore((state) => state.toggleTaggedUpdateVisibility);
   
-  // Subscribe to updates Map directly so component re-renders when it changes
-  const updatesMap = useFamilyTreeStore((state) => state.updates);
+  // Use custom hook to get updates for the profile person
+  const { updates, updateCount } = useProfileUpdates(egoId);
+  
+  // Subscribe to people Map for other uses
   const people = useFamilyTreeStore((state) => state.people);
   const peopleArray = Array.from(people.values());
-  
-  // Calculate derived values that depend on updates
-  const getUpdateCount = useFamilyTreeStore((state) => state.getUpdateCount);
-  const getUpdatesForPerson = useFamilyTreeStore((state) => state.getUpdatesForPerson);
 
   // Use ref to avoid stale closure in useEffect
   const deleteUpdateRef = useRef(deleteUpdate);
@@ -183,8 +182,10 @@ export default function ProfileScreen() {
   useEffect(() => {
     if (params.addUpdate === 'true') {
       setIsAddingUpdate(true);
+      // Clear the param to prevent re-opening on re-renders
+      router.setParams({ addUpdate: undefined });
     }
-  }, [params.addUpdate]);
+  }, [params.addUpdate, router]);
 
   // Show delete alert after menu modal closes
   // Using ref and delay to avoid iOS Alert timing issues
@@ -243,18 +244,6 @@ export default function ProfileScreen() {
 
   const ancestorsCount = person ? countAncestors(person.id) : 0;
   const descendantsCount = person ? countDescendants(person.id) : 0;
-  const updatesCount = person ? getUpdateCount(person.id) : 0;
-  const updates = person ? getUpdatesForPerson(person.id) : [];
-  useEffect(() => {
-    try {
-      if (typeof fetch !== 'undefined') {
-        fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:148',message:'Component render with updates',data:{updatesCount,updatesLength:updates.length,updatesMapSize:updatesMap?.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      }
-    } catch (e) {
-      // Silently fail logging
-    }
-  }, [updatesCount, updates.length, updatesMap]);
-  // #endregion
 
   // Gender-based colors for photo placeholder
   const getGenderColor = (gender?: Gender): string => {
@@ -307,7 +296,7 @@ export default function ProfileScreen() {
           <View style={styles.statsContainer}>
             <View style={styles.statItem}>
               <ThemedText type="defaultSemiBold" style={styles.statNumber}>
-                {updatesCount}
+                {updateCount}
               </ThemedText>
               <ThemedText style={styles.statLabel}>updates</ThemedText>
             </View>

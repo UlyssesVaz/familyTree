@@ -22,25 +22,12 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
-    // Log to debug endpoint if available
-    if (typeof fetch !== 'undefined') {
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location: 'ErrorBoundary:componentDidCatch',
-          message: 'Rendering error caught',
-          data: {
-            error: error.message,
-            stack: error.stack,
-            componentStack: errorInfo.componentStack,
-          },
-          timestamp: Date.now(),
-          sessionId: 'debug-session',
-          runId: 'error-boundary',
-        }),
-      }).catch(() => {});
-    }
+    
+    // TODO: Send to error monitoring service (Sentry, etc.)
+    // Example:
+    // Sentry.captureException(error, {
+    //   contexts: { react: { componentStack: errorInfo.componentStack } }
+    // });
   }
 
   render() {
