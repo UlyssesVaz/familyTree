@@ -1,0 +1,664 @@
+import { useEffect, useState, useMemo } from 'react';
+import { StyleSheet, View, Platform, Alert, ScrollView, Dimensions, Share } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+
+import {
+  PersonCard,
+  AddRelativeOrStoryModal,
+  AddRelativeTypeModal,
+  AddPersonModal,
+  InfiniteCanvas,
+  type RelativeType,
+} from '@/components/family-tree';
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { Colors } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import type { Gender, Person } from '@/types/family-tree';
+
+/**
+ * GenerationRow Component - Displays a generation of people (all siblings to each other)
+ * Shows each person with their spouses, and all people in the generation are spaced out
+ * Used for parents row, children row, etc.
+ */
+function GenerationRow({ 
+  people, 
+  isEgo = false,
+  egoPerson,
+  onEgoPress,
+  onEgoAddPress,
+  onPersonAddPress,
+  onPersonPress,
+}: { 
+  people: Person[];
+  isEgo?: boolean;
+  egoPerson?: Person;
+  onEgoPress?: () => void;
+  onEgoAddPress?: () => void;
+  onPersonAddPress?: (person: Person) => void;
+  onPersonPress?: (person: Person) => void;
+}) {
+  const getPerson = useFamilyTreeStore((state) => state.getPerson);
+  const getSiblings = useFamilyTreeStore((state) => state.getSiblings);
+
+  if (isEgo && egoPerson) {
+    // Special handling for ego row - ego is centered, then siblings on right
+    const egoSpouses = egoPerson.spouseIds
+      .map((id) => getPerson(id))
+      .filter((p): p is NonNullable<typeof p> => p !== undefined);
+    const egoSiblings = getSiblings(egoPerson.id);
+
+    return (
+      <View style={styles.personRow}>
+        {/* Ego's Spouses (Left) - Tight spacing */}
+        {egoSpouses.length > 0 && (
+          <View style={styles.spousesContainer}>
+            {egoSpouses.map((spouse) => (
+              <View key={spouse.id} style={[styles.spouseCardWrapper, { flexShrink: 0 }]}>
+                <PersonCard 
+                  person={spouse} 
+                  width={200}
+                  onPress={() => onPersonPress?.(spouse)}
+                  onAddPress={() => onPersonAddPress?.(spouse)}
+                  showAddButton={true}
+                />
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Ego Card (Center) */}
+        <View style={[styles.personCardWrapper, { flexShrink: 0 }]}>
+          <PersonCard 
+            person={egoPerson} 
+            width={250} 
+            onPress={onEgoPress}
+            onAddPress={onEgoAddPress}
+            showAddButton={true}
+          />
+        </View>
+
+        {/* Ego's Siblings (Right) - Spaced out horizontally with room for their spouses */}
+        {egoSiblings.length > 0 && (
+          <View style={styles.siblingsContainer}>
+            {egoSiblings.map((sibling) => {
+              const siblingSpouses = sibling.spouseIds
+                .map((id) => getPerson(id))
+                .filter((p): p is NonNullable<typeof p> => p !== undefined);
+              
+              return (
+                  <View key={sibling.id} style={styles.siblingGroup}>
+                  <View style={styles.siblingCardWrapper}>
+                    <PersonCard 
+                      person={sibling} 
+                      width={200}
+                      onPress={() => onPersonPress?.(sibling)}
+                      onAddPress={() => onPersonAddPress?.(sibling)}
+                      showAddButton={true}
+                    />
+                  </View>
+                  {siblingSpouses.length > 0 && (
+                    <View style={styles.siblingSpouseContainer}>
+                      {siblingSpouses.map((spouse) => (
+                        <View key={spouse.id} style={styles.siblingSpouseWrapper}>
+                          <PersonCard 
+                            person={spouse} 
+                            width={180}
+                            onPress={() => onPersonPress?.(spouse)}
+                            onAddPress={() => onPersonAddPress?.(spouse)}
+                            showAddButton={true}
+                          />
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  // For generation rows (parents, children) - all people are siblings to each other
+  // Display each person with their spouses, spaced out
+  return (
+    <View style={styles.personRow}>
+      {people.map((person) => {
+        const personSpouses = person.spouseIds
+          .map((id) => getPerson(id))
+          .filter((p): p is NonNullable<typeof p> => p !== undefined);
+
+        return (
+          <View key={person.id} style={styles.generationPersonGroup}>
+            {/* Person's spouses (if any) - displayed before person */}
+            {personSpouses.length > 0 && (
+              <View style={styles.spousesContainer}>
+                {personSpouses.map((spouse) => (
+                  <View key={spouse.id} style={[styles.spouseCardWrapper, { flexShrink: 0 }]}>
+                    <PersonCard 
+                      person={spouse} 
+                      width={180}
+                      onPress={() => onPersonPress?.(spouse)}
+                      onAddPress={() => onPersonAddPress?.(spouse)}
+                      showAddButton={true}
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+            {/* Person card */}
+            <View style={styles.generationPersonCard}>
+              <PersonCard 
+                person={person} 
+                width={200}
+                onPress={() => onPersonPress?.(person)}
+                onAddPress={() => onPersonAddPress?.(person)}
+                showAddButton={true}
+              />
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const egoId = useFamilyTreeStore((state) => state.egoId);
+  const people = useFamilyTreeStore((state) => state.people);
+  const getPerson = useFamilyTreeStore((state) => state.getPerson);
+  const getSiblings = useFamilyTreeStore((state) => state.getSiblings);
+  const initializeEgo = useFamilyTreeStore((state) => state.initializeEgo);
+  
+  // Get ego directly from people Map - this ensures we get updates when ego changes
+  const ego = useMemo(() => {
+    if (!egoId) return null;
+    return people.get(egoId) || null;
+  }, [egoId, people]);
+  const colorSchemeHook = useColorScheme();
+  const theme = colorSchemeHook ?? 'light';
+  const colors = Colors[theme];
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showRelativeTypeModal, setShowRelativeTypeModal] = useState(false);
+  const [showAddPersonModal, setShowAddPersonModal] = useState(false);
+  const [selectedRelativeType, setSelectedRelativeType] = useState<RelativeType | null>(null);
+  const [selectedPerson, setSelectedPerson] = useState<Person | null>(null); // Track which person we're adding to
+
+  // Convert people Map to array for dependency tracking (Maps don't trigger re-renders)
+  const peopleArray = useMemo(() => Array.from(people.values()), [people]);
+
+  // Recursively get all ancestor generations (parents, grandparents, etc.)
+  // Includes siblings of each person in each generation
+  const getAllAncestorGenerations = useMemo(() => {
+    if (!ego) return [];
+    
+    const generations: Person[][] = [];
+    const visited = new Set<string>();
+    
+    // Helper function to expand a generation to include all siblings
+    const expandGenerationWithSiblings = (baseGeneration: Person[]): Person[] => {
+      const expanded = new Map<string, Person>();
+      
+      // Add all base people
+      for (const person of baseGeneration) {
+        expanded.set(person.id, person);
+        visited.add(person.id);
+      }
+      
+      // For each person, add their siblings
+      for (const person of baseGeneration) {
+        const siblings = getSiblings(person.id);
+        for (const sibling of siblings) {
+          if (!visited.has(sibling.id) && !expanded.has(sibling.id)) {
+            expanded.set(sibling.id, sibling);
+            visited.add(sibling.id);
+          }
+        }
+      }
+      
+      return Array.from(expanded.values());
+    };
+    
+    // Start with ego's parents (generation 0) and expand with siblings
+    let currentGeneration = expandGenerationWithSiblings(
+      ego.parentIds
+        .map((id) => getPerson(id))
+        .filter((p): p is NonNullable<typeof p> => p !== undefined)
+    );
+    
+    // Keep going up generations until no more parents
+    while (currentGeneration.length > 0) {
+      // Add current generation (with siblings)
+      generations.push(currentGeneration);
+      
+      // Get next generation (parents of current generation, including siblings)
+      const nextGenerationBase: Person[] = [];
+      const nextGenIds = new Set<string>();
+      
+      for (const person of currentGeneration) {
+        for (const parentId of person.parentIds) {
+          if (!visited.has(parentId) && !nextGenIds.has(parentId)) {
+            const parent = getPerson(parentId);
+            if (parent) {
+              nextGenerationBase.push(parent);
+              nextGenIds.add(parentId);
+            }
+          }
+        }
+      }
+      
+      // Expand next generation with siblings
+      currentGeneration = expandGenerationWithSiblings(nextGenerationBase);
+    }
+    
+    return generations.reverse(); // Reverse so oldest generation is first
+  }, [ego, people, peopleArray, getPerson, getSiblings]); // Include getSiblings dependency
+
+  // Recursively get all descendant generations (children, grandchildren, etc.)
+  // Includes siblings of each person in each generation
+  const getAllDescendantGenerations = useMemo(() => {
+    if (!ego) return [];
+    
+    const generations: Person[][] = [];
+    const visited = new Set<string>();
+    
+    // Helper function to expand a generation to include all siblings
+    const expandGenerationWithSiblings = (baseGeneration: Person[]): Person[] => {
+      const expanded = new Map<string, Person>();
+      
+      // Add all base people
+      for (const person of baseGeneration) {
+        expanded.set(person.id, person);
+        visited.add(person.id);
+      }
+      
+      // For each person, add their siblings
+      for (const person of baseGeneration) {
+        const siblings = getSiblings(person.id);
+        for (const sibling of siblings) {
+          if (!visited.has(sibling.id) && !expanded.has(sibling.id)) {
+            expanded.set(sibling.id, sibling);
+            visited.add(sibling.id);
+          }
+        }
+      }
+      
+      return Array.from(expanded.values());
+    };
+    
+    // Start with ego's children (generation 0) and expand with siblings
+    let currentGeneration = expandGenerationWithSiblings(
+      ego.childIds
+        .map((id) => getPerson(id))
+        .filter((p): p is NonNullable<typeof p> => p !== undefined)
+    );
+    
+    // Keep going down generations until no more children
+    while (currentGeneration.length > 0) {
+      // Add current generation (with siblings)
+      generations.push(currentGeneration);
+      
+      // Get next generation (children of current generation, including siblings)
+      const nextGenerationBase: Person[] = [];
+      const nextGenIds = new Set<string>();
+      
+      for (const person of currentGeneration) {
+        for (const childId of person.childIds) {
+          if (!visited.has(childId) && !nextGenIds.has(childId)) {
+            const child = getPerson(childId);
+            if (child) {
+              nextGenerationBase.push(child);
+              nextGenIds.add(childId);
+            }
+          }
+        }
+      }
+      
+      // Expand next generation with siblings
+      currentGeneration = expandGenerationWithSiblings(nextGenerationBase);
+    }
+    
+    return generations;
+  }, [ego, people, peopleArray, getPerson, getSiblings]); // Include getSiblings dependency
+
+  // Get ego's immediate relationships (for ego row)
+  const { spouses, siblings } = useMemo(() => {
+    if (!ego) {
+      return { spouses: [], siblings: [] };
+    }
+
+    const spouses = ego.spouseIds
+      .map((id) => getPerson(id))
+      .filter((p): p is NonNullable<typeof p> => p !== undefined);
+
+    const siblings = getSiblings(ego.id);
+
+    return { spouses, siblings };
+  }, [ego, people, getPerson, getSiblings]);
+
+  // Temporary: Initialize ego if it doesn't exist (for testing)
+  // TODO: Replace with onboarding flow later
+  useEffect(() => {
+    if (!ego) {
+      initializeEgo('You', '2000-01-01', 'other');
+    }
+  }, [ego, initializeEgo]);
+
+  const handleEgoCardPress = () => {
+    // Navigate to profile tab when ego card is clicked
+    router.push('/profile');
+  };
+
+  const handleAddPress = (person?: Person) => {
+    // Use provided person or default to ego
+    const personToAddTo = person || ego;
+    if (!personToAddTo) return;
+    setSelectedPerson(personToAddTo);
+    setShowAddModal(true);
+  };
+
+  const handleAddRelative = () => {
+    setShowAddModal(false);
+    setShowRelativeTypeModal(true);
+  };
+
+  const handleAddStory = () => {
+    // TODO: Phase 2+ - For ego's own card, this shouldn't show
+    // For other people's cards, navigate to their profile and open Add Update modal
+    Alert.alert('Coming Soon', 'Add Story feature will navigate to their profile in a future phase');
+    setShowAddModal(false);
+  };
+
+  const handleSelectRelativeType = (type: RelativeType) => {
+    // Set state in the correct order: first set the type, then close the type modal, then open the add person modal
+    // This ensures selectedPerson remains set throughout the transition
+    setSelectedRelativeType(type);
+    setShowRelativeTypeModal(false);
+    setShowAddPersonModal(true);
+  };
+
+  const handleAddPerson = (data: {
+    name: string;
+    photoUrl?: string;
+    birthDate?: string;
+    gender?: Gender;
+    phoneNumber?: string;
+  }) => {
+    if (!selectedPerson || !selectedRelativeType) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:317',message:'Early return - missing selectedPerson or type',data:{hasSelectedPerson:!!selectedPerson,hasSelectedType:!!selectedRelativeType},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      return;
+    }
+
+    const addPerson = useFamilyTreeStore.getState().addPerson;
+    const addParent = useFamilyTreeStore.getState().addParent;
+    const addSpouse = useFamilyTreeStore.getState().addSpouse;
+    const addChild = useFamilyTreeStore.getState().addChild;
+    const addSibling = useFamilyTreeStore.getState().addSibling;
+
+    // Create the new person
+    const newPersonId = addPerson(data);
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:328',message:'New person created',data:{newPersonId,newPersonName:data.name,selectedPersonId:selectedPerson.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+
+    // Create the relationship based on type
+    try {
+      switch (selectedRelativeType) {
+        case 'parent':
+          addParent(selectedPerson.id, newPersonId);
+          break;
+        case 'spouse':
+          addSpouse(selectedPerson.id, newPersonId);
+          break;
+        case 'child':
+          addChild(selectedPerson.id, newPersonId);
+          break;
+        case 'sibling':
+          addSibling(selectedPerson.id, newPersonId);
+          if (__DEV__) {
+            console.log(`[Add Sibling] Added sibling relationship between ${selectedPerson.name} and ${data.name}`);
+          }
+          break;
+      }
+
+      // Success - reset state
+      setSelectedRelativeType(null);
+      setSelectedPerson(null);
+      setShowAddPersonModal(false);
+
+      // Always offer to send invite via native share
+      // Delay to ensure modal is fully closed before showing share sheet
+      setTimeout(() => {
+        const inviteMessage = `Hi ${data.name}! I've added you to our family tree. Join us to see and contribute to our shared family history!\n\n[Invite link will be added here in Phase 3]`;
+        
+        Alert.alert(
+          'Person Added!',
+          `Would you like to send ${data.name} an invite?`,
+          [
+            { text: 'Skip', style: 'cancel' },
+            {
+              text: 'Share Invite',
+              onPress: async () => {
+                try {
+                  // Small delay to ensure alert is dismissed before showing share sheet
+                  setTimeout(async () => {
+                    await Share.share({
+                      message: inviteMessage,
+                      title: `Invite ${data.name} to Family Tree`,
+                    });
+                  }, 300);
+                } catch (error) {
+                  console.error('Error sharing invite:', error);
+                  // Share.share doesn't throw errors, but just in case
+                }
+              },
+            },
+          ]
+        );
+      }, 300); // Wait for modal close animation
+    } catch (error) {
+      console.error('Error adding person:', error);
+      Alert.alert('Error', 'Failed to add person. Please try again.');
+    }
+  };
+
+  const backgroundColor = colors.background;
+  const topInset = Platform.OS === 'web' ? 0 : insets.top;
+  const contentPaddingTop = Math.max(topInset, Platform.OS === 'web' ? 0 : 8);
+
+  if (!ego) {
+    return (
+      <View style={[styles.wrapper, { backgroundColor, paddingTop: topInset }]}>
+        <ThemedView style={[styles.treeContainer, { paddingTop: contentPaddingTop, justifyContent: 'center' }]}>
+          <ThemedText>Loading...</ThemedText>
+        </ThemedView>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.wrapper, { backgroundColor, paddingTop: topInset }]}>
+      <InfiniteCanvas>
+        <ThemedView style={[styles.treeContainer, { paddingTop: contentPaddingTop }]}>
+          {/* Ancestor Generations (Above Ego) - Recursively display all parent generations */}
+          {getAllAncestorGenerations.map((generation, index) => (
+            <View key={`ancestor-gen-${index}`} style={styles.generationSection}>
+              <GenerationRow 
+                people={generation}
+                onPersonAddPress={handleAddPress}
+                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } } as any)}
+              />
+            </View>
+          ))}
+
+          {/* Ego Row (Center) */}
+          <GenerationRow 
+            people={[]}
+            isEgo={true}
+            egoPerson={ego}
+            onEgoPress={handleEgoCardPress}
+            onEgoAddPress={() => handleAddPress(ego)}
+            onPersonAddPress={handleAddPress}
+            onPersonPress={(person) => router.push(`/profile?personId=${person.id}`)}
+          />
+
+          {/* Descendant Generations (Below Ego) - Recursively display all child generations */}
+          {getAllDescendantGenerations.map((generation, index) => (
+            <View key={`descendant-gen-${index}`} style={styles.generationSection}>
+              <GenerationRow 
+                people={generation}
+                onPersonAddPress={handleAddPress}
+                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } } as any)}
+              />
+            </View>
+          ))}
+
+          {/* Empty State */}
+          {getAllAncestorGenerations.length === 0 && spouses.length === 0 && getAllDescendantGenerations.length === 0 && siblings.length === 0 && (
+            <View style={styles.emptyState}>
+              <ThemedText style={styles.emptyStateText}>
+                Tap the + button to add relatives to your family tree
+              </ThemedText>
+            </View>
+          )}
+        </ThemedView>
+      </InfiniteCanvas>
+
+      {/* Add Relative or Story Modal */}
+      {selectedPerson && (
+        <>
+          <AddRelativeOrStoryModal
+            visible={showAddModal}
+            person={selectedPerson}
+            onClose={() => {
+              setShowAddModal(false);
+              setSelectedPerson(null);
+            }}
+            onAddRelative={() => {
+              setShowAddModal(false); // Close this modal first
+              handleAddRelative(); // Then open next modal
+            }}
+            onAddStory={handleAddStory}
+          />
+
+          {/* Add Relative Type Modal */}
+          <AddRelativeTypeModal
+            visible={showRelativeTypeModal}
+            person={selectedPerson}
+            onClose={() => {
+              // Only clear selectedPerson if user manually closes (not when transitioning to AddPersonModal)
+              setShowRelativeTypeModal(false);
+              setSelectedPerson(null);
+            }}
+            onSelectType={(type) => {
+              handleSelectRelativeType(type);
+            }}
+          />
+
+          {/* Add Person Modal */}
+          {selectedRelativeType && selectedPerson && (
+            <AddPersonModal
+              visible={showAddPersonModal}
+              person={selectedPerson}
+              relativeType={selectedRelativeType}
+              onClose={() => {
+                setShowAddPersonModal(false);
+                setSelectedRelativeType(null);
+                setSelectedPerson(null);
+              }}
+              onAdd={handleAddPerson}
+            />
+          )}
+        </>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  wrapper: {
+    flex: 1,
+    // Background color extends into notch area
+  },
+  treeContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingVertical: 20,
+  },
+  generationSection: {
+    marginVertical: 40,
+    alignItems: 'center',
+    width: '100%',
+  },
+  personRow: {
+    flexDirection: 'row',
+    alignItems: 'center', // Center align all cards vertically
+    justifyContent: 'center',
+    flexWrap: 'nowrap', // Keep everything on one row, InfiniteCanvas handles overflow
+    paddingHorizontal: 10,
+    width: '100%',
+  },
+  generationPersonGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8, // Tight spacing between person's spouses and person
+    flexShrink: 0,
+    marginHorizontal: 20, // Space between each person in the generation
+  },
+  generationPersonCard: {
+    alignItems: 'center',
+  },
+  spousesContainer: {
+    flexDirection: 'row',
+    gap: 8, // Tight spacing - spouses form a pair/rectangle with person
+    flexShrink: 0,
+  },
+  spouseCardWrapper: {
+    alignItems: 'center',
+  },
+  personCardWrapper: {
+    alignItems: 'center',
+    marginHorizontal: 8, // Space between person and spouses
+  },
+  siblingsContainer: {
+    flexDirection: 'row',
+    gap: 40, // Generous spacing between sibling groups - allows room for their spouses
+    flexShrink: 0,
+    marginLeft: 20, // Extra space between person and first sibling
+  },
+  siblingGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8, // Tight spacing between sibling and their spouse(s)
+    flexShrink: 0,
+  },
+  siblingCardWrapper: {
+    alignItems: 'center',
+  },
+  siblingSpouseContainer: {
+    flexDirection: 'row',
+    gap: 8, // Tight spacing for sibling's spouses (if multiple)
+  },
+  siblingSpouseWrapper: {
+    alignItems: 'center',
+  },
+  emptyState: {
+    marginTop: 60,
+    padding: 20,
+    alignItems: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    textAlign: 'center',
+    opacity: 0.6,
+  },
+});
