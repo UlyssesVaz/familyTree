@@ -1,3 +1,6 @@
+// URL polyfill MUST be imported first - required for Supabase in React Native
+import 'react-native-url-polyfill/auto';
+
 // Polyfill for crypto.getRandomValues() - only needed on native platforms
 // Web has crypto.getRandomValues() built-in, so we only import on native
 import { Platform } from 'react-native';
@@ -5,6 +8,7 @@ if (Platform.OS !== 'web') {
   require('react-native-get-random-values');
 }
 
+import { useEffect } from 'react';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -17,6 +21,9 @@ import { AuthProvider } from '@/contexts/auth-context';
 import { ErrorProvider } from '@/contexts/error-context';
 import { ModalProvider } from '@/contexts/modal-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+
+// Supabase will be initialized when auth service is first used
+// No initialization needed here - Supabase client initializes lazily
 
 // No default route - let routing guard handle navigation
 

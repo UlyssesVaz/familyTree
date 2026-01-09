@@ -1,47 +1,37 @@
 /**
  * Login Screen
  * 
- * Simple login screen with SSO options.
- * Minimal typing - focus on SSO for ease of use.
+ * Simple login screen with native Google Sign-In button.
+ * Uses @react-native-google-signin/google-signin for native Google Sign-In experience.
  */
 
-import { useState } from 'react';
-import { StyleSheet, View, Pressable, ActivityIndicator, Alert } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
-import type { AuthProvider } from '@/services/auth/types';
-
-const SSO_PROVIDERS: Array<{ provider: AuthProvider; label: string; icon: string; color: string }> = [
-  { provider: 'google', label: 'Google', icon: 'google', color: '#4285F4' },
-  { provider: 'microsoft', label: 'Microsoft', icon: 'microsoft', color: '#00A4EF' },
-  { provider: 'apple', label: 'Apple', icon: 'apple', color: '#000000' },
-  { provider: 'slack', label: 'Slack', icon: 'slack', color: '#4A154B' },
-];
+import GoogleSignInButton from '@/components/auth';
 
 export default function LoginScreen() {
   const colorScheme = useColorScheme();
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
   const router = useRouter();
-  const { signInWithProvider, isLoading, error } = useAuth();
-  const [signingInProvider, setSigningInProvider] = useState<AuthProvider | null>(null);
+  const { isLoading } = useAuth();
 
-  const handleSSOSignIn = async (provider: AuthProvider) => {
-    try {
-      setSigningInProvider(provider);
-      await signInWithProvider(provider);
-      // Auth context will handle routing
-    } catch (err) {
-      Alert.alert('Sign In Failed', error?.message || 'Please try again');
-    } finally {
-      setSigningInProvider(null);
-    }
+  // Callback when Google sign-in succeeds
+  // The auth context will automatically detect the session change via onAuthStateChanged
+  const handleSignInSuccess = () => {
+    console.log('[LoginScreen] Google sign-in successful');
+    // Auth context will handle routing automatically
+  };
+
+  const handleSignInError = (error: Error) => {
+    console.error('[LoginScreen] Google sign-in error:', error);
+    // Error handling is done in the GoogleSignInButton component
   };
 
   return (
@@ -57,46 +47,13 @@ export default function LoginScreen() {
           </ThemedText>
         </View>
 
-        {/* SSO Buttons */}
+        {/* Native Google Sign-In Button */}
         <View style={styles.ssoSection}>
-          <ThemedText style={[styles.ssoLabel, { color: colors.icon }]}>
-            Or continue with:
-          </ThemedText>
-          
-          {SSO_PROVIDERS.map(({ provider, label, icon, color }) => {
-            const isSigningIn = signingInProvider === provider;
-            const disabled = isLoading || isSigningIn;
-
-            return (
-              <Pressable
-                key={provider}
-                onPress={() => handleSSOSignIn(provider)}
-                disabled={disabled}
-                style={({ pressed }) => [
-                  styles.ssoButton,
-                  {
-                    backgroundColor: colors.background,
-                    borderColor: colors.icon,
-                    opacity: disabled ? 0.5 : pressed ? 0.8 : 1,
-                  },
-                ]}
-              >
-                {isSigningIn ? (
-                  <ActivityIndicator size="small" color={color} />
-                ) : (
-                  <>
-                    {/* Icon placeholder - you can add actual provider icons */}
-                    <View style={[styles.iconPlaceholder, { backgroundColor: color }]}>
-                      <ThemedText style={styles.iconText}>{label[0]}</ThemedText>
-                    </View>
-                    <ThemedText style={[styles.ssoButtonText, { color: colors.text }]}>
-                      {label}
-                    </ThemedText>
-                  </>
-                )}
-              </Pressable>
-            );
-          })}
+          <GoogleSignInButton
+            onSignInSuccess={handleSignInSuccess}
+            onSignInError={handleSignInError}
+            disabled={isLoading}
+          />
         </View>
 
         {/* Footer */}
@@ -136,38 +93,8 @@ const styles = StyleSheet.create({
   },
   ssoSection: {
     marginBottom: 32,
-  },
-  ssoLabel: {
-    fontSize: 14,
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  ssoButton: {
-    flexDirection: 'row',
+    width: '100%',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginBottom: 12,
-    gap: 12,
-  },
-  iconPlaceholder: {
-    width: 24,
-    height: 24,
-    borderRadius: 4,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  iconText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  ssoButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
   },
   footer: {
     marginTop: 'auto',

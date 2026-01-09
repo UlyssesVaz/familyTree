@@ -206,11 +206,11 @@ export function AddPersonModal({
             {/* Birth Date Field */}
             <DatePickerField
               label="Birth Date"
-              value={birthDate}
+                value={birthDate}
               onChange={setBirthDate}
               placeholder="Select birth date"
               hint="Format: YYYY-MM-DD (e.g., 1990-01-15)"
-            />
+              />
 
             {/* Phone Number Field */}
             <View style={styles.field}>

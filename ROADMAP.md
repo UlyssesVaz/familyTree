@@ -60,18 +60,24 @@ Reverse engineering FamilySearch mobile app with ego-centric pedigree chart inte
 ---
 
 ## Phase 2: Onboarding & Auth (Before Main App)
-### Step 2.1: Auth Flow Structure
-- [ ] Create auth context/store
-- [ ] Implement auth check in `_layout.tsx`
-- [ ] Redirect to login if not authenticated
+### Step 2.1: Auth Flow Structure ✅
+- [x] Create auth context/store (`contexts/auth-context.tsx`)
+- [x] Implement auth service layer (`services/auth/`)
+- [x] Implement Supabase auth service (`services/auth/supabase-auth-service.ts`)
+- [x] Implement auth check in `_layout.tsx` with routing guards
+- [x] Redirect to login if not authenticated
+- [x] Google SSO integration using native SDK (`@react-native-google-signin/google-signin`)
+- [x] ID token flow with Supabase (`signInWithIdToken`)
+- ⚠️ Nonce verification skipped (SDK generates nonce internally, extracted from token)
 
-### Step 2.2: Onboarding Flow
-- [ ] Create onboarding screens:
-  - Welcome screen
-  - Create yourself (name, birth date, gender)
-  - Create/Join family (org)
-- [ ] On completion: initialize ego in store
-- [ ] Redirect to main app
+### Step 2.2: Onboarding Flow ✅
+- [x] Create onboarding screens:
+  - [x] Welcome screen (`app/(onboarding)/welcome.tsx`)
+  - [x] Create yourself profile (`app/(onboarding)/profile.tsx`)
+  - [x] Location selection (`app/(onboarding)/location.tsx`)
+- [x] On completion: initialize ego in store with `createdBy` field
+- [x] Redirect to main app based on onboarding completion
+- [x] Routing guard prevents accessing app without completing onboarding
 
 ### Step 2.3: Invite Flow
 - [ ] Handle invite links
@@ -80,10 +86,12 @@ Reverse engineering FamilySearch mobile app with ego-centric pedigree chart inte
 - [ ] Handle race conditions (check before redirect)
 
 **Acceptance Criteria:**
-- ✅ Unauthenticated users see login
-- ✅ New users complete onboarding → ego created
-- ✅ Invited users can join family
-- ✅ No flicker/race conditions
+- ✅ Unauthenticated users see login (Google SSO button)
+- ✅ New users complete onboarding → ego created with `createdBy` field
+- ✅ Authenticated users with completed onboarding → redirected to app
+- ✅ Authenticated users without onboarding → redirected to welcome screen
+- ✅ No flicker/race conditions (routing guards handle state transitions)
+- ⚠️ Invited users can join family (not yet implemented)
 
 ---
 
@@ -260,7 +268,12 @@ Reverse engineering FamilySearch mobile app with ego-centric pedigree chart inte
 - ✅ Phase 5: Tree visualization
 - ✅ Profile Section: Complete Instagram-style profile with updates
 - ✅ Infinite Canvas: Basic implementation (web working, mobile in progress)
-- ✅ Onboarding & Auth: Complete flow with SSO support
+- ✅ Onboarding & Auth: Complete flow with Google SSO via Supabase
+  - ✅ Native Google Sign-In SDK integration
+  - ✅ Supabase `signInWithIdToken()` flow
+  - ✅ Auth context with routing guards
+  - ✅ Onboarding screens (welcome, profile, location)
+  - ⚠️ Nonce check skipped (SDK generates nonce, extracted from token)
 - ✅ Location Services: Device location integration
 - ✅ Refactoring: Hooks, service layer, separation of concerns
 - ✅ Error Handling: Enhanced with error context
@@ -269,8 +282,10 @@ Reverse engineering FamilySearch mobile app with ego-centric pedigree chart inte
 
 **Current Focus:**
 - ✅ Frontend architecture complete and ready for backend integration
+- ✅ Authentication fully integrated with Supabase (Google SSO)
 - ✅ API design document outlines all endpoints and WebSocket events
-- ✅ Service layer abstraction ready for API integration
+- ✅ Service layer abstraction ready for API integration (auth service complete)
+- ⏭️ Next: Connect family tree service to backend APIs
 
 **Next Steps:**
 - **Backend Implementation**: Create backend APIs per `API_DESIGN.md`

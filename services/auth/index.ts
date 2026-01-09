@@ -6,7 +6,7 @@
  */
 
 import { AuthService } from './types';
-import { FirebaseAuthService } from './firebase-auth-service';
+import { SupabaseAuthService } from './supabase-auth-service';
 
 // Mock service for development (no backend)
 class MockAuthService implements AuthService {
@@ -81,17 +81,16 @@ class MockAuthService implements AuthService {
  * 
  * Switch between implementations:
  * - MockAuthService: For development (no backend)
- * - FirebaseAuthService: For production (Firebase)
+ * - SupabaseAuthService: For production (Supabase)
  */
 export function getAuthService(): AuthService {
-  // TODO: Switch to FirebaseAuthService when Firebase is configured
-  const useMock = process.env.EXPO_PUBLIC_USE_MOCK_AUTH === 'true' || true; // Default to mock for now
+  const useMock = process.env.EXPO_PUBLIC_USE_MOCK_AUTH === 'true' || false; // Default to Supabase
   
   if (useMock) {
     return new MockAuthService();
   }
   
-  return new FirebaseAuthService();
+  return new SupabaseAuthService();
 }
 
 export * from './types';

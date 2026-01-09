@@ -42,6 +42,9 @@ export interface AuthService {
   /** Sign in with SSO provider */
   signInWithProvider(provider: AuthProvider): Promise<AuthSession>;
   
+  /** Sign in with ID token (for native Google Sign-In) */
+  signInWithIdToken(provider: AuthProvider, idToken: string): Promise<AuthSession>;
+  
   /** Sign in with email/password */
   signInWithEmail(email: string, password: string): Promise<AuthSession>;
   

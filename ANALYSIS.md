@@ -25,8 +25,11 @@
 - ⚠️ **Missing**: `FamilyTreeState` interface (store interface exists but not exported as type)
 
 #### Phase 2: Onboarding & Auth
-- ❌ **Not Started**: Auth flow structure
-- ❌ **Not Started**: Onboarding screens
+- ✅ **Completed**: Auth flow structure with Supabase
+- ✅ **Completed**: Google SSO authentication (native SDK with ID token)
+- ⚠️ **Note**: Nonce check skipped (SDK generates nonce internally, extracted from token)
+- ✅ **Completed**: Auth context with routing guards
+- ✅ **Completed**: Onboarding screens
 - ❌ **Not Started**: Invite flow handling
 
 #### Phase 4: DAG Validation
@@ -379,28 +382,32 @@ const connections = useMemo(() => {
 
 **Why**: Validate UX before backend complexity
 
-#### **Step 2: Add Auth Context**
-1. **Create `AuthContext`** with:
-   - `user: User | null`
+#### **Step 2: Add Auth Context** ✅ **COMPLETED**
+1. ✅ **Created `AuthContext`** with:
+   - `session: AuthSession | null`
    - `isAuthenticated: boolean`
-   - `login(email, password)`
-   - `logout()`
-   - `signup(email, password, name)`
-2. **Protect routes** in `_layout.tsx`
-3. **Redirect logic** (onboarding → app, or login → app)
+   - `signInWithProvider(provider)` - Google SSO only
+   - `signOut()`
+   - `signInWithEmail()` / `signUpWithEmail()` - Not supported (Google SSO only)
+2. ✅ **Protected routes** in `app/_layout.tsx` with routing guards
+3. ✅ **Redirect logic** implemented (login → onboarding → app)
+4. ✅ **Service layer** abstraction (`services/auth/`) for easy backend swaps
+5. ✅ **Native Google Sign-In** using `@react-native-google-signin/google-signin`
+6. ⚠️ **Nonce verification**: Skipped (SDK generates nonce internally, extracted from JWT token for Supabase)
 
 **Why**: Clean separation, easy to swap implementations
 
-#### **Step 3: Backend Integration**
-1. **Design API contracts** (REST endpoints)
-2. **Create API service layer** (`services/api.ts`)
-3. **Add auth endpoints**:
-   - `POST /auth/signup`
-   - `POST /auth/login`
-   - `POST /auth/refresh`
-   - `GET /auth/me`
-4. **Add token management** (store in SecureStore)
-5. **Add API client** (axios/fetch with interceptors)
+#### **Step 3: Backend Integration** ⚠️ **PARTIALLY COMPLETE**
+1. ✅ **API design documented** (`API_DESIGN.md`)
+2. ✅ **Auth service layer** (`services/auth/`) with Supabase implementation
+3. ✅ **Auth integration**:
+   - ✅ Google SSO via Supabase `signInWithIdToken()`
+   - ✅ Session management (stored by Supabase)
+   - ✅ Token refresh (via Supabase)
+   - ✅ Auth state listener (`onAuthStateChanged`)
+   - ❌ Email/password auth (not supported - Google SSO only)
+4. ✅ **Token management** (handled by Supabase client)
+5. ⏭️ **API client** for family tree endpoints (next step)
 
 **Why**: Incremental, testable, maintainable
 
@@ -481,11 +488,11 @@ POST   /api/invites/:token/accept
 
 ### **Implementation Priority**
 
-1. ✅ **Frontend onboarding** (no backend)
-2. ✅ **Auth context** (mock auth)
-3. ⏭️ **Backend API design** (document endpoints)
-4. ⏭️ **API integration** (connect frontend to backend)
-5. ⏭️ **Real-time sync** (WebSockets/Firebase)
+1. ✅ **Frontend onboarding** (complete with screens)
+2. ✅ **Auth context** (Supabase integration with Google SSO)
+3. ✅ **Backend API design** (document endpoints in `API_DESIGN.md`)
+4. ⏭️ **API integration** (connect family tree service to backend APIs)
+5. ⏭️ **Real-time sync** (WebSockets/Supabase Realtime)
 
 ---
 
@@ -499,10 +506,11 @@ POST   /api/invites/:token/accept
 5. ✅ Implement connection lines (SVG approach)
 
 ### **Short-term (With Backend)**
-1. ⏭️ Create API service layer
-2. ⏭️ Add auth context + onboarding
-3. ⏭️ Add AsyncStorage persistence
+1. ✅ Create API service layer (auth service complete, family tree service ready)
+2. ✅ Add auth context + onboarding (Google SSO with Supabase)
+3. ⏭️ Add AsyncStorage persistence (for offline support)
 4. ⏭️ Add DAG validation utils
+5. ⏭️ Connect family tree service to backend APIs
 
 ### **Medium-term**
 1. ⏭️ Real-time sync (Firebase/Supabase)

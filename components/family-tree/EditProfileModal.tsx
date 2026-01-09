@@ -220,7 +220,7 @@ export function EditProfileModal({ person, visible, onClose, onSave }: EditProfi
 
           <DatePickerField
             label="Birth Date"
-            value={birthDate}
+              value={birthDate}
             onChange={setBirthDate}
             placeholder="Select birth date"
             hint="Format: YYYY-MM-DD (e.g., 2000-01-15)"
