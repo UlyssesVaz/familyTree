@@ -5,8 +5,9 @@
  * Welcomes user and explains what's next.
  */
 
-import { StyleSheet, View, Pressable } from 'react-native';
+import { StyleSheet, View, Pressable, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
@@ -21,6 +22,7 @@ export default function WelcomeScreen() {
   const colors = Colors[theme];
   const router = useRouter();
   const { session } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const handleContinue = () => {
     router.push('/(onboarding)/profile');
@@ -28,8 +30,14 @@ export default function WelcomeScreen() {
 
   const userName = session?.user.name || session?.user.email?.split('@')[0] || 'there';
 
+  // iOS best practice: Safe area top inset + additional padding (minimum 44pt for comfortable spacing from notch)
+  // Use max to ensure we have enough space even if safe area is small
+  const topPadding = Platform.OS === 'ios' ? Math.max(insets.top, 44) + 20 : insets.top + 20;
+  const bottomPadding = Math.max(insets.bottom, 20);
+
   return (
     <ThemedView style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.topSpacer, { height: topPadding }]} />
       <View style={styles.content}>
         {/* Welcome Message */}
         <View style={styles.header}>
@@ -66,15 +74,20 @@ export default function WelcomeScreen() {
           style={({ pressed }) => [
             styles.continueButton,
             {
-              backgroundColor: colors.tint,
+              backgroundColor: theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : colors.tint,
+              borderWidth: theme === 'dark' ? 1 : 0,
+              borderColor: theme === 'dark' ? 'rgba(255, 255, 255, 0.3)' : 'transparent',
               opacity: pressed ? 0.8 : 1,
             },
           ]}
         >
-          <ThemedText style={[styles.continueButtonText, { color: '#FFFFFF' }]}>Get Started</ThemedText>
+          <ThemedText style={[styles.continueButtonText, { color: '#FFFFFF' }]}>
+            Get Started
+          </ThemedText>
           <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
         </Pressable>
       </View>
+      <View style={[styles.bottomSpacer, { height: bottomPadding }]} />
     </ThemedView>
   );
 }
@@ -83,11 +96,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  topSpacer: {
+    // Height set dynamically based on safe area insets
+  },
+  bottomSpacer: {
+    // Height set dynamically based on safe area insets
+  },
   content: {
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 24,
-    paddingVertical: 48,
   },
   header: {
     alignItems: 'center',

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Pressable, ScrollView, StyleSheet, TouchableOpacity, View, Modal, Alert, Platform, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -12,22 +12,19 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useProfileUpdates } from '@/hooks/use-profile-updates';
+import { useUpdateManagement } from '@/hooks/use-update-management';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
+import { getGenderColor } from '@/utils/gender-utils';
 import { useAuth } from '@/contexts/auth-context';
 import { locationService, LocationData } from '@/services/location-service';
-import type { Gender, Update, Person } from '@/types/family-tree';
+import type { Update, Person } from '@/types/family-tree';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ addUpdate?: string }>();
   const [isEditing, setIsEditing] = useState(false);
-  const [isAddingUpdate, setIsAddingUpdate] = useState(false);
-  const [updateToEdit, setUpdateToEdit] = useState<Update | null>(null);
-  const [expandedUpdateId, setExpandedUpdateId] = useState<string | null>(null);
-  const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [location, setLocation] = useState<LocationData | null>(null);
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [showLocationInput, setShowLocationInput] = useState(false);
@@ -49,7 +46,6 @@ export default function ProfileScreen() {
   const updateEgo = useFamilyTreeStore((state) => state.updateEgo);
   const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
   const toggleUpdatePrivacy = useFamilyTreeStore((state) => state.toggleUpdatePrivacy);
-  const deleteUpdate = useFamilyTreeStore((state) => state.deleteUpdate);
   const updateUpdate = useFamilyTreeStore((state) => state.updateUpdate);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
   const toggleTaggedUpdateVisibility = useFamilyTreeStore((state) => state.toggleTaggedUpdateVisibility);
@@ -57,15 +53,23 @@ export default function ProfileScreen() {
   // Use custom hook to get updates for the profile person
   const { updates, updateCount } = useProfileUpdates(egoId);
   
+  // Use centralized update management hook
+  const {
+    isAddingUpdate,
+    setIsAddingUpdate,
+    updateToEdit,
+    setUpdateToEdit,
+    expandedUpdateId,
+    setExpandedUpdateId,
+    menuUpdateId,
+    setMenuUpdateId,
+    pendingDeleteId,
+    setPendingDeleteId,
+  } = useUpdateManagement();
+  
   // Subscribe to people Map for other uses
   const people = useFamilyTreeStore((state) => state.people);
   const peopleArray = Array.from(people.values());
-
-  // Use ref to avoid stale closure in useEffect
-  const deleteUpdateRef = useRef(deleteUpdate);
-  useEffect(() => {
-    deleteUpdateRef.current = deleteUpdate;
-  }, [deleteUpdate]);
 
   const toggleColorScheme = () => {
     const newScheme = colorScheme === 'dark' ? 'light' : 'dark';
@@ -187,49 +191,7 @@ export default function ProfileScreen() {
     }
   }, [params.addUpdate, router]);
 
-  // Show delete alert after menu modal closes
-  // Using ref and delay to avoid iOS Alert timing issues
-  useEffect(() => {
-    if (pendingDeleteId && !menuUpdateId) {
-      // Menu has closed, wait for animation to complete then show alert
-      const updateIdToDelete = pendingDeleteId;
-      
-      // Clear pending state immediately to prevent re-triggering
-      setPendingDeleteId(null);
-      
-      // Use requestAnimationFrame + setTimeout to ensure modal is fully unmounted
-      // This is necessary on iOS where Alert can fail if called too soon after Modal dismissal
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          // On web, Alert.alert callbacks may not fire reliably - use window.confirm as fallback
-          if (Platform.OS === 'web') {
-            const confirmed = window.confirm('Are you sure you want to delete this update?');
-            if (confirmed) {
-              deleteUpdateRef.current(updateIdToDelete);
-            }
-          } else {
-            Alert.alert(
-              'Delete Update',
-              'Are you sure you want to delete this update?',
-              [
-                {
-                  text: 'Cancel',
-                  style: 'cancel',
-                },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: () => {
-                    deleteUpdateRef.current(updateIdToDelete);
-                  },
-                },
-              ]
-            );
-          }
-        }, Platform.OS === 'ios' ? 300 : 100); // Longer delay on iOS
-      });
-    }
-  }, [pendingDeleteId, menuUpdateId]);
+  // Delete confirmation is handled by useUpdateManagement hook
 
   // If no person found, show loading or error
   if (!person) {
@@ -245,19 +207,7 @@ export default function ProfileScreen() {
   const ancestorsCount = person ? countAncestors(person.id) : 0;
   const descendantsCount = person ? countDescendants(person.id) : 0;
 
-  // Gender-based colors for photo placeholder
-  const getGenderColor = (gender?: Gender): string => {
-    switch (gender) {
-      case 'male':
-        return '#4A90E2'; // Blue
-      case 'female':
-        return '#F5A623'; // Orange
-      default:
-        return colors.icon; // Default gray
-    }
-  };
-
-  const genderColor = getGenderColor(person.gender);
+  const genderColor = getGenderColor(person?.gender, colors.icon);
   const backgroundColor = colors.background;
   const topInset = Platform.OS === 'web' ? 0 : insets.top;
   const contentPaddingTop = Math.max(topInset, Platform.OS === 'web' ? 0 : 8);

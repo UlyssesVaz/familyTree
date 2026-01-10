@@ -105,7 +105,11 @@ export default function ProfileSetupScreen() {
           style={({ pressed }) => [
             styles.continueButton,
             {
-              backgroundColor: canContinue ? colors.tint : colors.icon,
+              backgroundColor: canContinue 
+                ? (theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : colors.tint)
+                : colors.icon,
+              borderWidth: canContinue && theme === 'dark' ? 1 : 0,
+              borderColor: canContinue && theme === 'dark' ? 'rgba(255, 255, 255, 0.3)' : 'transparent',
               opacity: (!canContinue || isSaving || pressed) ? 0.6 : 1,
             },
           ]}

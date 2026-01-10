@@ -6,8 +6,9 @@
  */
 
 import { useState, useEffect } from 'react';
-import { StyleSheet, View, Pressable, ActivityIndicator, Alert } from 'react-native';
+import { StyleSheet, View, Pressable, ActivityIndicator, Alert, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
@@ -22,9 +23,14 @@ export default function LocationSetupScreen() {
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const updateEgo = useFamilyTreeStore((state) => state.updateEgo);
   const [location, setLocation] = useState<LocationData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // iOS best practice: Safe area top inset + additional padding
+  const topPadding = Platform.OS === 'ios' ? Math.max(insets.top, 44) + 20 : insets.top + 20;
+  const bottomPadding = Math.max(insets.bottom, 20);
 
   useEffect(() => {
     // Try to get location automatically
@@ -64,6 +70,7 @@ export default function LocationSetupScreen() {
 
   return (
     <ThemedView style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.topSpacer, { height: topPadding }]} />
       <View style={styles.content}>
         {/* Header */}
         <View style={styles.header}>
@@ -131,7 +138,9 @@ export default function LocationSetupScreen() {
             style={({ pressed }) => [
               styles.continueButton,
               {
-                backgroundColor: colors.tint,
+                backgroundColor: theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : colors.tint,
+                borderWidth: theme === 'dark' ? 1 : 0,
+                borderColor: theme === 'dark' ? 'rgba(255, 255, 255, 0.3)' : 'transparent',
                 opacity: pressed ? 0.8 : 1,
               },
             ]}
@@ -157,6 +166,7 @@ export default function LocationSetupScreen() {
           )}
         </View>
       </View>
+      <View style={[styles.bottomSpacer, { height: bottomPadding }]} />
     </ThemedView>
   );
 }
@@ -165,11 +175,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  topSpacer: {
+    // Height set dynamically based on safe area insets
+  },
+  bottomSpacer: {
+    // Height set dynamically based on safe area insets
+  },
   content: {
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 24,
-    paddingVertical: 48,
   },
   header: {
     alignItems: 'center',

@@ -6,7 +6,9 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import type { Gender, Person } from '@/types/family-tree';
+import { getGenderColor } from '@/utils/gender-utils';
+import { formatDateRange } from '@/utils/date-utils';
+import type { Person } from '@/types/family-tree';
 
 interface PersonCardProps {
   /** Person data to display */
@@ -37,35 +39,8 @@ export function PersonCard({ person, width = 200, onPress, onAddPress, showAddBu
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
 
-  // Format dates for display (YYYY-MM-DD -> "Born 1900" or "1900-1961")
-  const formatDateRange = () => {
-    if (!person.birthDate && !person.deathDate) return null;
-    
-    const birthYear = person.birthDate?.split('-')[0] || '';
-    const deathYear = person.deathDate?.split('-')[0] || '';
-    
-    if (birthYear && deathYear) {
-      return `${birthYear} - ${deathYear}`;
-    } else if (birthYear) {
-      return `Born ${birthYear}`;
-    }
-    return null;
-  };
-
-  // Gender-based colors (FamilySearch style: blue = male, orange = female)
-  const getGenderColor = (gender?: Gender): string => {
-    switch (gender) {
-      case 'male':
-        return '#4A90E2'; // Blue
-      case 'female':
-        return '#F5A623'; // Orange
-      default:
-        return colors.icon; // Default gray
-    }
-  };
-
-  const genderColor = getGenderColor(person.gender);
-  const dateRange = formatDateRange();
+  const genderColor = getGenderColor(person.gender, colors.icon);
+  const dateRange = formatDateRange(person.birthDate, person.deathDate);
 
   const cardContent = (
     <>

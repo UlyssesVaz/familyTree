@@ -5,15 +5,15 @@
  * Used in both EditProfileModal and Onboarding screens.
  */
 
-import { useState } from 'react';
-import { StyleSheet, TextInput, View, Alert, Pressable } from 'react-native';
+import { useState, useEffect } from 'react';
+import { StyleSheet, TextInput, View, Pressable } from 'react-native';
 import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useImagePicker } from '@/hooks/use-image-picker';
 import { DatePickerField } from './DatePickerField';
 import type { Gender } from '@/types/family-tree';
 
@@ -50,7 +50,24 @@ export function ProfileFormFields({
   const [bio, setBio] = useState(initialValues.bio || '');
   const [birthDate, setBirthDate] = useState(initialValues.birthDate || '');
   const [gender, setGender] = useState<Gender | undefined>(initialValues.gender);
-  const [photoUri, setPhotoUri] = useState<string | null>(initialValues.photoUrl || null);
+  
+  // Use centralized image picker hook
+  const { photoUri, pickImage, removePhoto, reset: resetImage, isPicking } = useImagePicker(
+    initialValues.photoUrl || null,
+    {
+      aspect: [1, 1],
+      quality: 0.8,
+      permissionMessage: 'We need access to your photos to add a profile picture.',
+    }
+  );
+
+  // Update image picker when initialValues change (e.g., when editing existing profile)
+  useEffect(() => {
+    if (initialValues.photoUrl !== photoUri) {
+      resetImage(initialValues.photoUrl || null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialValues.photoUrl]); // Only react to photoUrl changes from parent
 
   // Notify parent of changes
   const updateParent = (updates: Partial<ProfileFormData>) => {
@@ -62,6 +79,19 @@ export function ProfileFormFields({
       photoUrl: photoUri || undefined,
       ...updates,
     });
+  };
+
+  // Handle image picked - update parent immediately
+  const handlePickImage = async () => {
+    const uri = await pickImage();
+    if (uri) {
+      updateParent({ photoUrl: uri });
+    }
+  };
+
+  const handleRemovePhoto = () => {
+    removePhoto();
+    updateParent({ photoUrl: undefined });
   };
 
   const handleNameChange = (text: string) => {
@@ -85,42 +115,6 @@ export function ProfileFormFields({
     updateParent({ gender: finalGender });
   };
 
-  const requestPermissions = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(
-        'Permission Required',
-        'We need access to your photos to add a profile picture.'
-      );
-      return false;
-    }
-    return true;
-  };
-
-  const pickImage = async () => {
-    const hasPermission = await requestPermissions();
-    if (!hasPermission) return;
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-      allowsMultipleSelection: false,
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      const uri = result.assets[0].uri;
-      setPhotoUri(uri);
-      updateParent({ photoUrl: uri });
-    }
-  };
-
-  const removePhoto = () => {
-    setPhotoUri(null);
-    updateParent({ photoUrl: undefined });
-  };
-
   return (
     <View>
       {/* Photo Section */}
@@ -140,20 +134,21 @@ export function ProfileFormFields({
           )}
           <View style={styles.photoButtons}>
             <Pressable
-              onPress={pickImage}
+              onPress={handlePickImage}
+              disabled={isPicking}
               style={({ pressed }) => [
                 styles.photoButton,
-                { borderColor: colors.tint },
+                { borderColor: colors.tint, opacity: (isPicking || pressed) ? 0.6 : 1 },
                 pressed && styles.photoButtonPressed,
               ]}
             >
               <ThemedText style={[styles.photoButtonText, { color: colors.tint }]}>
-                {photoUri ? 'Change Photo' : 'Select Photo'}
+                {isPicking ? 'Loading...' : (photoUri ? 'Change Photo' : 'Select Photo')}
               </ThemedText>
             </Pressable>
             {photoUri && (
               <Pressable
-                onPress={removePhoto}
+                onPress={handleRemovePhoto}
                 style={({ pressed }) => [
                   styles.photoButton,
                   styles.removeButton,

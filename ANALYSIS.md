@@ -544,3 +544,541 @@ POST   /api/invites/:token/accept
 5. **Real-time sync**: Add collaboration features
 
 **Overall Assessment**: 🟢 **Good foundation, ready for backend integration**
+
+---
+
+## 10. Refactoring & Code Quality Opportunities
+
+### **Priority 1: Easy Wins (Low Effort, High Impact)**
+
+#### **1.1 Duplicate Utility Functions** 🔴 **HIGH PRIORITY**
+
+**Issue**: Same utility functions duplicated across multiple files.
+
+**Duplicates Found**:
+- `getGenderColor()` - Duplicated in:
+  - `components/family-tree/PersonCard.tsx` (lines 56-65)
+  - `app/(tabs)/profile.tsx` (lines 249-259)
+  - `app/person/[personId].tsx` (lines 106-116)
+- `formatDateRange()` - Only in `PersonCard.tsx`, but date formatting logic appears elsewhere
+- Gender color constants (`#4A90E2`, `#F5A623`) - Hardcoded in multiple places
+
+**Refactoring**:
+```typescript
+// utils/gender-utils.ts
+export const GENDER_COLORS = {
+  male: '#4A90E2',
+  female: '#F5A623',
+  other: undefined, // Uses theme color
+} as const;
+
+export function getGenderColor(gender?: Gender, themeColor?: string): string {
+  if (!gender || gender === 'other') return themeColor || '#888';
+  return GENDER_COLORS[gender];
+}
+
+// utils/date-utils.ts
+export function formatDateRange(birthDate?: string, deathDate?: string): string | null {
+  if (!birthDate && !deathDate) return null;
+  const birthYear = birthDate?.split('-')[0] || '';
+  const deathYear = deathDate?.split('-')[0] || '';
+  if (birthYear && deathYear) return `${birthYear} - ${deathYear}`;
+  if (birthYear) return `Born ${birthYear}`;
+  return null;
+}
+
+export function formatYear(dateString?: string): string | null {
+  return dateString?.split('-')[0] || null;
+}
+```
+
+**Impact**: 
+- ✅ Removes ~30 lines of duplicate code
+- ✅ Single source of truth for gender colors
+- ✅ Easier to update styling consistently
+- ✅ Better testability
+
+**Estimated Effort**: 30 minutes
+
+---
+
+#### **1.2 Duplicate Update State Management** 🔴 **HIGH PRIORITY**
+
+**Issue**: Same state variables and logic duplicated in `profile.tsx` and `family.tsx`.
+
+**Duplicates Found**:
+```typescript
+// Both files have:
+const [isAddingUpdate, setIsAddingUpdate] = useState(false);
+const [updateToEdit, setUpdateToEdit] = useState<Update | null>(null);
+const [expandedUpdateId, setExpandedUpdateId] = useState<string | null>(null);
+const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
+const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+const deleteUpdateRef = useRef(deleteUpdate);
+// Plus similar useEffect for delete confirmation
+```
+
+**Refactoring**:
+```typescript
+// hooks/use-update-management.ts
+export function useUpdateManagement() {
+  const [isAddingUpdate, setIsAddingUpdate] = useState(false);
+  const [updateToEdit, setUpdateToEdit] = useState<Update | null>(null);
+  const [expandedUpdateId, setExpandedUpdateId] = useState<string | null>(null);
+  const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  
+  const deleteUpdate = useFamilyTreeStore((state) => state.deleteUpdate);
+  const deleteUpdateRef = useRef(deleteUpdate);
+  
+  useEffect(() => {
+    deleteUpdateRef.current = deleteUpdate;
+  }, [deleteUpdate]);
+
+  // Delete confirmation logic
+  useEffect(() => {
+    if (pendingDeleteId && !menuUpdateId) {
+      const updateIdToDelete = pendingDeleteId;
+      setPendingDeleteId(null);
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          Alert.alert(
+            'Delete Update',
+            'Are you sure you want to delete this update?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: () => deleteUpdateRef.current(updateIdToDelete),
+              },
+            ],
+            { cancelable: true }
+          );
+        }, Platform.OS === 'ios' ? 300 : 100);
+      });
+    }
+  }, [pendingDeleteId, menuUpdateId]);
+
+  return {
+    isAddingUpdate,
+    setIsAddingUpdate,
+    updateToEdit,
+    setUpdateToEdit,
+    expandedUpdateId,
+    setExpandedUpdateId,
+    menuUpdateId,
+    setMenuUpdateId,
+    pendingDeleteId,
+    setPendingDeleteId,
+  };
+}
+```
+
+**Impact**:
+- ✅ Removes ~50 lines of duplicate code
+- ✅ Single source of truth for update state management
+- ✅ Consistent behavior across screens
+- ✅ Easier to add features (e.g., undo delete)
+
+**Estimated Effort**: 1 hour
+
+---
+
+#### **1.3 Duplicate Image Picking Logic** 🟡 **MEDIUM PRIORITY**
+
+**Issue**: Similar image picking code in `AddPersonModal.tsx` and `EditProfileModal.tsx`.
+
+**Similar Code**:
+- Permission requesting
+- Image picker configuration
+- Error handling
+- Photo removal
+
+**Refactoring**:
+```typescript
+// hooks/use-image-picker.ts
+export function useImagePicker(options?: {
+  aspect?: [number, number];
+  quality?: number;
+}) {
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [isPicking, setIsPicking] = useState(false);
+
+  const pickImage = async () => {
+    if (isPicking) return;
+    setIsPicking(true);
+    
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please grant camera roll permissions');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: options?.aspect || [1, 1],
+        quality: options?.quality || 0.8,
+        allowsMultipleSelection: false,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setPhotoUri(result.assets[0].uri);
+        return result.assets[0].uri;
+      }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image');
+    } finally {
+      setIsPicking(false);
+    }
+  };
+
+  const removePhoto = () => setPhotoUri(null);
+
+  return { photoUri, setPhotoUri, pickImage, removePhoto, isPicking };
+}
+```
+
+**Impact**:
+- ✅ Removes ~60 lines of duplicate code
+- ✅ Consistent image picking behavior
+- ✅ Easier to add camera support later
+- ✅ Better error handling centralization
+
+**Estimated Effort**: 45 minutes
+
+---
+
+### **Priority 2: Medium Complexity (Moderate Effort, Good Impact)**
+
+#### **2.1 Duplicate Gender Selection UI** 🟡 **MEDIUM PRIORITY**
+
+**Issue**: Gender selection buttons duplicated in `AddPersonModal.tsx` and `ProfileFormFields.tsx` with nearly identical code (~50 lines each).
+
+**Refactoring**:
+```typescript
+// components/family-tree/GenderSelector.tsx
+export function GenderSelector({
+  value,
+  onChange,
+  colors, // Theme colors
+}: {
+  value?: Gender;
+  onChange: (gender?: Gender) => void;
+  colors: ThemeColors;
+}) {
+  // Extract the gender button rendering logic
+  // Single component, reusable everywhere
+}
+```
+
+**Impact**:
+- ✅ Removes ~100 lines of duplicate code
+- ✅ Consistent gender selection UI
+- ✅ Easier to update styling
+- ✅ Better accessibility (can add labels once)
+
+**Estimated Effort**: 1.5 hours
+
+---
+
+#### **2.2 Extract Update Rendering Component** 🟡 **MEDIUM PRIORITY**
+
+**Issue**: Update rendering logic duplicated in `profile.tsx` and `family.tsx` with minor variations.
+
+**Similar Code**:
+- Update card rendering
+- Mention formatting
+- Expand/collapse logic
+- Menu actions
+- Photo display
+
+**Refactoring**:
+```typescript
+// components/family-tree/UpdateCard.tsx
+export function UpdateCard({
+  update,
+  person,
+  isExpanded,
+  onExpand,
+  onEdit,
+  onDelete,
+  onTogglePrivacy,
+  onPress,
+  // ... other props
+}) {
+  // Extract all update rendering logic
+  // Handle both profile and feed variations
+}
+```
+
+**Impact**:
+- ✅ Removes ~200+ lines of duplicate code
+- ✅ Consistent update display
+- ✅ Easier to add features (e.g., reactions, comments)
+- ✅ Better performance (can memoize properly)
+
+**Estimated Effort**: 2-3 hours
+
+---
+
+#### **2.3 Form Validation Utilities** 🟡 **MEDIUM PRIORITY**
+
+**Issue**: Basic validation scattered across modals (name required, date format, etc.).
+
+**Refactoring**:
+```typescript
+// utils/form-validation.ts
+export const personFormSchema = {
+  name: {
+    required: true,
+    minLength: 1,
+    maxLength: 100,
+    validate: (value: string) => value.trim().length > 0,
+  },
+  birthDate: {
+    pattern: /^\d{4}-\d{2}-\d{2}$/,
+    validate: (value: string) => {
+      if (!value) return true; // Optional
+      const date = new Date(value);
+      return !isNaN(date.getTime()) && date < new Date();
+    },
+  },
+  phoneNumber: {
+    pattern: /^\+?[\d\s\-()]+$/,
+    optional: true,
+  },
+};
+
+export function validatePersonForm(data: Partial<Person>): {
+  isValid: boolean;
+  errors: Record<string, string>;
+} {
+  // Centralized validation logic
+}
+```
+
+**Impact**:
+- ✅ Consistent validation across forms
+- ✅ Easier to add new validation rules
+- ✅ Better error messages
+- ✅ Ready for form library integration (react-hook-form)
+
+**Estimated Effort**: 2 hours
+
+---
+
+### **Priority 3: Higher Complexity (Higher Effort, Strategic Impact)**
+
+#### **3.1 Extract Large Screen Components** 🔵 **STRATEGIC**
+
+**Issue**: Large screen files (700-800+ lines) mixing UI, business logic, and state management.
+
+**Files to Refactor**:
+- `app/(tabs)/index.tsx` (707 lines) - Tree visualization + layout logic
+- `app/(tabs)/profile.tsx` (862 lines) - Profile + updates + modals
+- `app/(tabs)/family.tsx` (552 lines) - Feed + filtering + modals
+
+**Refactoring Strategy**:
+
+**For `index.tsx`**:
+- ✅ Already extracted `useTreeLayout` hook (good!)
+- ⏭️ Extract `GenerationRow` to separate file
+- ⏭️ Extract share/favorite logic to hooks
+- ⏭️ Extract modal state management
+
+**For `profile.tsx`**:
+- ✅ Already using `useProfileUpdates` hook (good!)
+- ⏭️ Extract profile header to `ProfileHeader.tsx`
+- ⏭️ Extract update list to `UpdateList.tsx`
+- ⏭️ Use `useUpdateManagement` hook (Priority 1.2)
+- ⏭️ Extract location management to hook
+
+**For `family.tsx`**:
+- ✅ Already using `useFamilyFeed` hook (good!)
+- ⏭️ Extract feed header to `FamilyFeedHeader.tsx`
+- ⏭️ Extract filter UI to `FeedFilterBar.tsx`
+- ⏭️ Use `useUpdateManagement` hook
+- ⏭️ Extract update list component
+
+**Target Structure**:
+```
+app/(tabs)/
+  index.tsx (200-300 lines) - Main tree screen, orchestrates components
+  profile.tsx (200-300 lines) - Main profile screen, orchestrates components
+  family.tsx (200-300 lines) - Main feed screen, orchestrates components
+
+components/family-tree/
+  tree/
+    GenerationRow.tsx
+    TreeHeader.tsx
+    TreeActions.tsx (share, favorite)
+  profile/
+    ProfileHeader.tsx
+    UpdateList.tsx
+    ProfileActions.tsx
+  feed/
+    FeedHeader.tsx
+    FeedFilterBar.tsx
+    FeedUpdateList.tsx
+```
+
+**Impact**:
+- ✅ Much easier to maintain
+- ✅ Better testability
+- ✅ Reusable components
+- ✅ Faster development (less scrolling, clearer structure)
+
+**Estimated Effort**: 1-2 days
+
+---
+
+#### **3.2 Store Selector Optimization** 🔵 **STRATEGIC**
+
+**Issue**: Multiple `useFamilyTreeStore` calls in components, potentially causing unnecessary re-renders.
+
+**Current Pattern**:
+```typescript
+const ego = useFamilyTreeStore((state) => state.getEgo());
+const egoId = useFamilyTreeStore((state) => state.egoId);
+const people = useFamilyTreeStore((state) => state.people);
+const addPerson = useFamilyTreeStore((state) => state.addPerson);
+// ... many more
+```
+
+**Refactoring**:
+```typescript
+// hooks/use-family-tree.ts - Composite hook
+export function useFamilyTree() {
+  const store = useFamilyTreeStore();
+  
+  return {
+    // Person access
+    getEgo: () => store.getEgo(),
+    egoId: store.egoId,
+    getPerson: store.getPerson,
+    people: store.people,
+    
+    // Actions
+    addPerson: store.addPerson,
+    updatePerson: store.updatePerson,
+    // ... etc
+    
+    // Computed values (memoized)
+    peopleArray: useMemo(() => Array.from(store.people.values()), [store.people]),
+  };
+}
+
+// Or use Zustand selectors for better performance
+const usePeople = () => useFamilyTreeStore((state) => state.people);
+const useEgo = () => useFamilyTreeStore((state) => state.getEgo());
+```
+
+**Impact**:
+- ✅ Better performance (fewer re-renders)
+- ✅ Cleaner component code
+- ✅ Easier to optimize later
+- ✅ Better TypeScript inference
+
+**Estimated Effort**: 3-4 hours
+
+---
+
+#### **3.3 Extract Relationship Calculation Logic** 🔵 **STRATEGIC**
+
+**Issue**: Relationship traversal logic exists in store, but some calculations might be in components.
+
+**Opportunity**: Create pure utility functions for relationship queries that can be:
+- Tested independently
+- Used by store and components
+- Optimized with memoization
+- Documented with examples
+
+**Refactoring**:
+```typescript
+// utils/relationship-queries.ts
+export function getAncestors(personId: string, people: Map<string, Person>): Person[] {
+  // Pure function, easily testable
+}
+
+export function getDescendants(personId: string, people: Map<string, Person>): Person[] {
+  // Pure function
+}
+
+export function getCousins(personId: string, people: Map<string, Person>): Person[] {
+  // Complex logic, but isolated and testable
+}
+
+export function calculateRelationship(person1: Person, person2: Person, people: Map<string, Person>): RelationshipType {
+  // "Uncle", "Cousin", "Great-grandparent", etc.
+}
+```
+
+**Impact**:
+- ✅ Better testability
+- ✅ Reusable across store and components
+- ✅ Can add complex queries (e.g., "find all cousins")
+- ✅ Performance optimizations (memoization, caching)
+
+**Estimated Effort**: 4-6 hours
+
+---
+
+### **Priority 4: Architecture Improvements (Long-term)**
+
+#### **4.1 Consider Form Library Integration** 🟢 **FUTURE**
+
+**Current**: Manual form state management in every modal.
+
+**Consider**: `react-hook-form` + `zod` for:
+- Automatic validation
+- Less boilerplate
+- Better performance
+- Type-safe forms
+
+**When**: After Priority 2.3 (form validation utils) to understand patterns first.
+
+---
+
+#### **4.2 Date Library Integration** 🟢 **FUTURE**
+
+**Current**: Manual date string manipulation (`YYYY-MM-DD`).
+
+**Consider**: `date-fns` or `dayjs` for:
+- Consistent date operations
+- Better formatting
+- Timezone handling
+- Relative dates ("2 years ago")
+
+**When**: When adding more date features (age calculations, anniversaries, etc.).
+
+---
+
+### **Refactoring Summary by Priority**
+
+| Priority | Refactoring | Lines Saved | Effort | Impact |
+|----------|------------|-------------|--------|--------|
+| 1.1 | Extract gender/date utils | ~30 | 30 min | High |
+| 1.2 | Extract update management hook | ~50 | 1 hour | High |
+| 1.3 | Extract image picker hook | ~60 | 45 min | Medium |
+| 2.1 | Extract gender selector | ~100 | 1.5 hours | Medium |
+| 2.2 | Extract update card component | ~200 | 2-3 hours | High |
+| 2.3 | Form validation utils | - | 2 hours | Medium |
+| 3.1 | Extract large screen components | - | 1-2 days | Very High |
+| 3.2 | Store selector optimization | - | 3-4 hours | Medium |
+| 3.3 | Relationship query utils | - | 4-6 hours | Medium |
+
+**Total Estimated Impact**: ~440 lines of duplicate code removed, better maintainability, improved testability.
+
+**Recommended Order**:
+1. Start with Priority 1 (easy wins) - Quick morale boost
+2. Then Priority 2 (medium complexity) - Good ROI
+3. Finally Priority 3 (strategic) - When planning larger features
+4. Priority 4 (future) - As needed
+
+---
+
+**Overall Assessment**: 🟢 **Good foundation, ready for backend integration**

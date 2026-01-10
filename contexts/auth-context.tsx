@@ -54,7 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setSession(currentSession);
           setIsLoading(false);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Auth initialization error:', err);
         if (mounted) {
           setIsLoading(false);
@@ -121,13 +121,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (ego && (!isEgoForCurrentUser || !egoCreatedBy)) {
             useFamilyTreeStore.getState().clearEgo();
           }
-          router.replace('/(onboarding)/welcome');
+          // Only redirect to welcome if not already on welcome screen (prevent duplicate navigation)
+          if (!inOnboardingGroup || segments[1] !== 'welcome') {
+            router.replace('/(onboarding)/welcome');
+          }
         }
       } else if (inTabsGroup && !onboardingComplete) {
         // Trying to access main app but onboarding not complete
-        router.replace('/(onboarding)/welcome');
+        // Only redirect if not already on welcome screen
+        if (!inOnboardingGroup || segments[1] !== 'welcome') {
+          router.replace('/(onboarding)/welcome');
+        }
       }
-      // If in onboarding group, let them navigate through it (no redirect)
+      // If in onboarding group and already on a valid onboarding screen, let them navigate through it (no redirect)
     }
   }, [session, isLoading, segments, router]);
 
@@ -179,22 +185,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       setError(null);
       await authService.current.signOut();
-      setSession(null);
       // Clear ego when signing out (fresh start for next login)
       useFamilyTreeStore.getState().clearEgo();
-      // Use setTimeout to ensure state updates complete before navigation
-      setTimeout(() => {
-        router.replace('/(auth)/login');
-      }, 0);
+      // Clear session - routing guard will handle navigation to login
+      setSession(null);
+      // Don't manually navigate - let the routing guard handle it to avoid duplicate navigations
     } catch (err: any) {
       setError(err);
       // Don't throw - let the routing guard handle navigation
       // Clear session anyway to ensure sign out completes
-      setSession(null);
       useFamilyTreeStore.getState().clearEgo();
-      setTimeout(() => {
-        router.replace('/(auth)/login');
-      }, 0);
+      setSession(null);
     }
   };
 

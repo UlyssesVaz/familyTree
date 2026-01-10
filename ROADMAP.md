@@ -3,6 +3,362 @@
 ## Overview
 Reverse engineering FamilySearch mobile app with ego-centric pedigree chart interface. Built incrementally, ensuring each feature works before proceeding.
 
+---
+
+## 🎯 Development Journey & Lessons Learned
+
+### **High-Level Summary of Accomplishments**
+
+This project has successfully built a **production-ready family tree mobile application** with the following key achievements:
+
+#### **✅ Core Features Completed**
+1. **Full Family Tree Visualization** - Ego-centric tree with parents, siblings, spouses, and children
+2. **Instagram-Style Profiles** - Complete profile system with photo updates, bio, and tagging
+3. **Family Feed** - Timeline of family updates with filtering and privacy controls
+4. **Google SSO Authentication** - Native Google Sign-In integrated with Supabase backend
+5. **Complete Onboarding Flow** - Welcome → Profile Setup → Location → Main App
+6. **Service Layer Architecture** - Clean abstraction ready for backend API integration
+7. **Comprehensive API Design** - Full REST + WebSocket specification documented
+
+#### **🏗️ Architecture Highlights**
+- **State Management**: Zustand with optimistic updates pattern
+- **Routing**: Expo Router with file-based routing and protected routes
+- **Authentication**: Service layer abstraction (currently Supabase, easy to swap)
+- **Separation of Concerns**: Types, stores, components, utils, services well-organized
+- **Multi-User Ready**: `createdBy` tracking, timestamp-based conflict resolution
+
+---
+
+### **🛣️ Development Evolution**
+
+#### **Phase 1: Foundation (MVP)**
+- Started with simple ego node display
+- Built PersonCard component with FamilySearch-style design
+- Implemented Zustand store with Map-based person storage
+- Added bidirectional relationship management
+
+**Key Decision**: Used `Map<string, Person>` instead of arrays for O(1) lookups - crucial for large trees.
+
+#### **Phase 2: Feature Expansion**
+- Added parent/child/spouse relationships
+- Built modal system for adding relatives
+- Implemented tree visualization with generation rows
+- Added profile system with photo updates
+
+**Key Decision**: Chose card-based layout over graph library initially - faster to build, easier to iterate.
+
+#### **Phase 3: Social Features**
+- Instagram-style profile with updates/stories
+- Family feed with filtering (all vs. group)
+- Tagging system with mention parsing
+- Privacy controls (public/private updates)
+
+**Key Decision**: Built social features before backend - validated UX before investing in infrastructure.
+
+#### **Phase 4: Authentication & Onboarding**
+- **Started with**: Mock auth service for rapid prototyping
+- **Migrated to**: Supabase with Google SSO (native SDK)
+- Built complete onboarding flow with routing guards
+- Added location services integration
+
+**Key Decision**: Abstraction layer allowed switching from mock → Supabase without changing components.
+
+---
+
+### **🚨 Major Pitfalls & Solutions**
+
+#### **1. Google SSO Nonce Verification Challenge** 🔴 **CRITICAL**
+
+**The Problem**:
+- Supabase documentation suggests using nonce verification for security
+- React Native Google Sign-In SDK (`@react-native-google-signin/google-signin`) **does NOT support custom nonces**
+- SDK generates nonce internally - we cannot control it
+- Initial attempts to use `expo-crypto` for nonce hashing failed due to SDK limitations
+
+**Discovery Process**:
+- Spent significant time trying to implement proper nonce flow
+- Investigated SDK source code and TypeScript types
+- Confirmed: `ConfigureParams` and `SignInParams` have NO nonce field
+- JWT tokens from SDK contain Google-generated nonces
+
+**Solution**:
+- Extracted nonce from JWT token after Google sign-in
+- Passed extracted nonce to Supabase (less secure but functional)
+- Documented the limitation clearly in code comments
+- **Trade-off**: Reduced security vs. working authentication
+
+**Lesson for Prompt Engineering**:
+- ❌ **Don't assume**: "Implement Google SSO with nonce verification" - SDK limitations matter
+- ✅ **Better prompt**: "Implement Google SSO authentication. Check SDK capabilities first, document limitations"
+- ✅ **Research phase**: Always check library capabilities before implementing security features
+- ✅ **Document trade-offs**: Clear comments about security implications of workarounds
+
+---
+
+#### **2. Routing Guard Race Conditions** 🟡 **MODERATE**
+
+**The Problem**:
+- Auth state checks happened asynchronously
+- Components rendered before auth state was determined
+- Flicker/flash of wrong screens during navigation
+- Multiple redirects happening simultaneously
+
+**Discovery**:
+- Observed flicker when app started
+- Logged auth state changes and found timing issues
+- `useAuthStateChanged` fired before initial session check completed
+
+**Solution**:
+- Added `isLoading` state to prevent premature redirects
+- Single source of truth in `AuthContext`
+- Routing guard waits for `isLoading === false` before deciding redirect
+- Used `useEffect` with proper dependencies to handle state transitions
+
+**Implementation**:
+```typescript
+// AuthContext routing guard
+useEffect(() => {
+  if (isLoading) return; // ⚠️ CRITICAL: Wait for auth check
+  
+  // Now safe to check auth state and redirect
+  if (!session) {
+    router.replace('/(auth)/login');
+  } else {
+    // Check onboarding status...
+  }
+}, [session, isLoading, segments, router]);
+```
+
+**Lesson for Prompt Engineering**:
+- ❌ **Don't assume**: "Add routing guards" - race conditions are common
+- ✅ **Better prompt**: "Implement routing guards with loading state to prevent race conditions"
+- ✅ **Specify edge cases**: "Handle app startup, auth state changes, and deep links"
+- ✅ **Request verification**: "Test for flicker/flash during navigation transitions"
+
+---
+
+#### **3. Large Component Files (700-800 lines)** 🟡 **MODERATE**
+
+**The Problem**:
+- Screen components grew organically to 700-862 lines
+- Mixed concerns: UI rendering, business logic, state management, modal handling
+- Hard to maintain, test, and understand
+- Duplicate code patterns across files
+
+**Discovery**:
+- Code review revealed massive files
+- Similar patterns in `profile.tsx` and `family.tsx` (update management)
+- Relationship calculations scattered across components
+- Date formatting, gender colors duplicated in multiple places
+
+**Current Status**:
+- ✅ Extracted some hooks (`useTreeLayout`, `useProfileUpdates`, `useFamilyFeed`)
+- ⚠️ Still need to extract more (see `ANALYSIS.md` Section 10 for full refactoring plan)
+- ⚠️ Identified ~440 lines of duplicate code to extract
+
+**Solution (In Progress)**:
+- Priority-based refactoring plan created
+- Start with easy wins (utility functions)
+- Then extract hooks (update management, image picker)
+- Finally break down large components into smaller pieces
+
+**Lesson for Prompt Engineering**:
+- ❌ **Don't assume**: "Build feature X" will result in clean code
+- ✅ **Better prompt**: "Build feature X with proper separation: extract hooks for logic, utils for pure functions, components for UI"
+- ✅ **Request code review**: "After implementation, identify code duplication and suggest refactoring"
+- ✅ **Incremental approach**: "Build MVP first, then refactor before adding more features"
+
+---
+
+#### **4. Service Layer Abstraction Timing** 🟢 **SUCCESS**
+
+**What Went Right**:
+- Created auth service abstraction from the start
+- Used mock implementation initially
+- Easy migration to Supabase when ready
+- Family tree service ready for backend integration
+
+**The Approach**:
+```typescript
+// services/auth/index.ts - Factory pattern
+export function getAuthService(): AuthService {
+  return new SupabaseAuthService(); // Was: MockAuthService
+}
+
+// Components don't care which implementation
+const { signInWithProvider } = useAuth();
+```
+
+**Why It Worked**:
+- Started with interface/abstraction before implementation
+- Mock allowed rapid frontend development
+- Real implementation swapped in without component changes
+
+**Lesson for Prompt Engineering**:
+- ✅ **Good prompt**: "Create service layer abstraction that allows swapping implementations"
+- ✅ **Request interfaces first**: "Define interfaces before implementations"
+- ✅ **Mock for speed**: "Create mock implementation for rapid development, document migration path"
+- ✅ **Future-proofing**: "Design for easy migration to real backend later"
+
+---
+
+#### **5. State Management Pattern Confusion** 🟡 **MODERATE**
+
+**The Problem**:
+- Multiple `useFamilyTreeStore` calls in same component
+- Unclear when to use selectors vs. direct store access
+- Potential unnecessary re-renders
+- Inconsistent patterns across components
+
+**Discovery**:
+- Some components had 10+ store selectors
+- Performance wasn't an issue yet (small trees), but pattern was unclear
+- Hard to optimize later without consistent approach
+
+**Solution**:
+- Documented best practices in analysis
+- Created composite hooks where it made sense
+- Left optimization for later (premature optimization avoided)
+
+**Lesson for Prompt Engineering**:
+- ✅ **Request patterns**: "Document state management patterns and when to use each"
+- ✅ **Performance awareness**: "Design for scalability, optimize when needed"
+- ⚠️ **Don't over-optimize**: Performance wasn't an issue - documented pattern for future
+
+---
+
+#### **6. Date Handling String Manipulation** 🟢 **ACCEPTABLE**
+
+**The Problem**:
+- Using `YYYY-MM-DD` strings throughout
+- Manual date parsing/formatting scattered across codebase
+- No date validation library
+
+**Decision**:
+- **Chose**: Keep simple string format for now
+- **Reason**: ISO 8601 format, works with native date pickers, no timezone complexity
+- **Future**: Can migrate to `date-fns` or `dayjs` when needed (age calculations, relative dates)
+
+**Lesson for Prompt Engineering**:
+- ✅ **Pragmatic decisions**: "Use simple solution now, document migration path for complex needs"
+- ✅ **Don't over-engineer**: String dates work fine for birth/death dates
+- ✅ **Future-proofing**: Document when to add date library (e.g., "when adding age calculations")
+
+---
+
+### **🎓 Key Lessons for Future Prompt Engineering**
+
+#### **Do's ✅**
+
+1. **Request SDK/Library Research First**
+   - "Check library capabilities before implementing feature X"
+   - "Document any limitations or workarounds needed"
+   - "Verify TypeScript types match documentation"
+
+2. **Specify Edge Cases & Race Conditions**
+   - "Handle loading states to prevent race conditions"
+   - "Test for flicker/flash during state transitions"
+   - "Consider app startup, deep links, and state restoration"
+
+3. **Request Incremental Refactoring**
+   - "After building feature, identify code duplication"
+   - "Extract reusable utilities and hooks"
+   - "Keep components under 300 lines"
+
+4. **Design for Change**
+   - "Create abstraction layer for X (mock → real implementation)"
+   - "Document migration path from mock to production"
+   - "Use factory pattern for service selection"
+
+5. **Balance Pragmatism with Best Practices**
+   - "Use simple solution now, document when to upgrade"
+   - "Avoid premature optimization, but design for scalability"
+   - "Document trade-offs (security, performance, complexity)"
+
+#### **Don'ts ❌**
+
+1. **Don't Assume Library Capabilities**
+   - ❌ "Implement X with feature Y" (assumes Y exists)
+   - ✅ "Research if library supports Y, implement X accordingly"
+
+2. **Don't Skip Edge Cases**
+   - ❌ "Add routing guards" (misses race conditions)
+   - ✅ "Add routing guards with loading states and handle edge cases"
+
+3. **Don't Let Files Grow Unchecked**
+   - ❌ "Add feature to existing component" (can create 800-line files)
+   - ✅ "Add feature, then refactor if component exceeds 300 lines"
+
+4. **Don't Mix Concerns Without Plan**
+   - ❌ "Build screen with all features" (UI + logic + state mixed)
+   - ✅ "Build screen, extract logic to hooks, extract utils to separate files"
+
+5. **Don't Ignore Trade-offs**
+   - ❌ "Implement secure authentication" (nonce issue discovered later)
+   - ✅ "Implement authentication, document security trade-offs and limitations"
+
+---
+
+### **📊 Metrics & Status**
+
+**Code Quality**:
+- ✅ TypeScript throughout (type safety)
+- ✅ Separation of concerns (types, stores, components, utils, services)
+- ⚠️ Large component files (700-800 lines) - refactoring plan in place
+- ⚠️ ~440 lines of duplicate code identified - extraction plan ready
+
+**Feature Completeness**:
+- ✅ Core tree functionality: 100%
+- ✅ Social features (profiles, feed): 100%
+- ✅ Authentication: 100% (Google SSO)
+- ✅ Onboarding: 100%
+- ⏭️ Backend integration: 0% (API design complete, implementation pending)
+- ⏭️ Real-time sync: 0% (planned for Phase 7)
+
+**Architecture Readiness**:
+- ✅ Service layer abstraction: Complete
+- ✅ API design document: Complete
+- ✅ Error handling: Enhanced with context
+- ✅ Modal management: Centralized
+- ⏭️ Backend APIs: Not implemented
+- ⏭️ Database schema: Not implemented
+
+---
+
+### **🚀 What's Next**
+
+**Immediate Priorities**:
+1. Backend API implementation (per `API_DESIGN.md`)
+2. Connect family tree service to backend APIs
+3. Real-time sync with Supabase Realtime
+4. File upload for photos
+
+**Code Quality Improvements**:
+1. Extract duplicate utilities (Priority 1.1-1.3 from ANALYSIS.md)
+2. Break down large screen components (Priority 3.1)
+3. Add unit tests for store and utils
+4. Add integration tests for critical flows
+
+**Future Features**:
+1. Invite system (Phase 2.3)
+2. DAG validation (Phase 4)
+3. Connection lines visualization (Phase 6.2)
+4. Advanced tree layout algorithms (Phase 6.3)
+
+---
+
+### **💡 Development Philosophy That Emerged**
+
+1. **Build → Refactor → Build**: Ship features, then clean up, then add more
+2. **Abstract Early**: Service layers pay off when swapping implementations
+3. **Document Trade-offs**: Security, performance, complexity - be explicit
+4. **Incremental Complexity**: Simple solutions first, upgrade when needed
+5. **Test in Production-like Environment**: Auth issues discovered when integrating real SDK
+
+---
+
+This journey shows that **prompt engineering is iterative** - initial prompts built features, but refinement prompts (code review, refactoring, edge case handling) improved quality. The key is **balancing feature velocity with code quality**, and **documenting decisions and trade-offs** for future reference.
+
 ## Architecture Principles
 - **Separation of Concerns**: Types, stores, components, utils in separate folders
 - **Multi-user Ready**: Optimistic updates, conflict resolution, real-time sync (later)

@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useImagePicker } from '@/hooks/use-image-picker';
 import { DatePickerField } from './DatePickerField';
 import type { Gender, Person } from '@/types/family-tree';
 
@@ -35,50 +35,24 @@ export function EditProfileModal({ person, visible, onClose, onSave }: EditProfi
   const [name, setName] = useState(person.name);
   const [bio, setBio] = useState(person.bio || '');
   const [birthDate, setBirthDate] = useState(person.birthDate || '');
-  const [photoUri, setPhotoUri] = useState<string | null>(person.photoUrl || null);
+  
+  // Use image picker hook
+  const { photoUri, setPhotoUri, pickImage, removePhoto, reset: resetImage } = useImagePicker(
+    person.photoUrl || null,
+    {
+      aspect: [1, 1],
+      quality: 0.8,
+      permissionMessage: 'We need access to your photos to change your profile picture.',
+    }
+  );
 
   // Update form when person changes
   useEffect(() => {
     setName(person.name);
     setBio(person.bio || '');
     setBirthDate(person.birthDate || '');
-    setPhotoUri(person.photoUrl || null);
-  }, [person]);
-
-  const requestPermissions = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(
-        'Permission Required',
-        'We need access to your photos to change your profile picture.'
-      );
-      return false;
-    }
-    return true;
-  };
-
-  const pickImage = async () => {
-    const hasPermission = await requestPermissions();
-    if (!hasPermission) return;
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-      allowsMultipleSelection: false,
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      // Use the edited URI if available, otherwise use the original
-      const uri = result.assets[0].uri;
-      setPhotoUri(uri);
-    }
-  };
-
-  const removePhoto = () => {
-    setPhotoUri(null);
-  };
+    resetImage(person.photoUrl || null);
+  }, [person, resetImage]); // resetImage is now stable with useCallback
 
   const handleSave = () => {
     onSave({

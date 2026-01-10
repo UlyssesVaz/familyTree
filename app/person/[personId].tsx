@@ -12,8 +12,9 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useProfileUpdates } from '@/hooks/use-profile-updates';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
+import { getGenderColor } from '@/utils/gender-utils';
 import { AddUpdateModal } from '@/components/family-tree';
-import type { Gender, Person, Update } from '@/types/family-tree';
+import type { Person, Update } from '@/types/family-tree';
 
 export default function PersonProfileModal() {
   const insets = useSafeAreaInsets();
@@ -102,19 +103,7 @@ export default function PersonProfileModal() {
   const ancestorsCount = countAncestors(person.id);
   const descendantsCount = countDescendants(person.id);
 
-  // Gender-based colors for photo placeholder
-  const getGenderColor = (gender?: Gender): string => {
-    switch (gender) {
-      case 'male':
-        return '#4A90E2'; // Blue
-      case 'female':
-        return '#F5A623'; // Orange
-      default:
-        return colors.icon; // Default gray
-    }
-  };
-
-  const genderColor = getGenderColor(person.gender);
+  const genderColor = getGenderColor(person.gender, colors.icon);
   const backgroundColor = colors.background;
   const topInset = Platform.OS === 'web' ? 0 : insets.top;
   const contentPaddingTop = Math.max(topInset, Platform.OS === 'web' ? 0 : 8);

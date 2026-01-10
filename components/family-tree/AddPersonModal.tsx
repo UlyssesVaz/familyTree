@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View, Platform, Alert } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View, Alert } from 'react-native';
 import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useImagePicker } from '@/hooks/use-image-picker';
 import { DatePickerField } from './DatePickerField';
 import type { Gender, Person, RelativeType } from '@/types/family-tree';
 
@@ -51,15 +51,20 @@ export function AddPersonModal({
   const colors = Colors[theme];
 
   const [name, setName] = useState('');
-  const [photoUrl, setPhotoUrl] = useState<string | undefined>();
   const [birthDate, setBirthDate] = useState('');
   const [gender, setGender] = useState<Gender | undefined>();
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [isPickingPhoto, setIsPickingPhoto] = useState(false);
+  
+  // Use image picker hook
+  const { photoUri, pickImage, removePhoto, reset: resetImage, isPicking } = useImagePicker(undefined, {
+    aspect: [1, 1],
+    quality: 0.8,
+    permissionMessage: 'Please grant camera roll permissions to add photos',
+  });
 
   const resetForm = () => {
     setName('');
-    setPhotoUrl(undefined);
+    resetImage();
     setBirthDate('');
     setGender(undefined);
     setPhoneNumber('');
@@ -78,7 +83,7 @@ export function AddPersonModal({
 
     onAdd({
       name: name.trim(),
-      photoUrl,
+      photoUrl: photoUri || undefined,
       birthDate: birthDate.trim() || undefined,
       gender,
       phoneNumber: phoneNumber.trim() || undefined,
@@ -86,39 +91,6 @@ export function AddPersonModal({
 
     resetForm();
     onClose();
-  };
-
-  const pickImage = async () => {
-    if (isPickingPhoto) return;
-    
-    setIsPickingPhoto(true);
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please grant camera roll permissions to add photos');
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets[0]) {
-        setPhotoUrl(result.assets[0].uri);
-      }
-    } catch (error) {
-      console.error('Error picking image:', error);
-      Alert.alert('Error', 'Failed to pick image');
-    } finally {
-      setIsPickingPhoto(false);
-    }
-  };
-
-  const removePhoto = () => {
-    setPhotoUrl(undefined);
   };
 
   const getRelativeTypeLabel = () => {
@@ -163,9 +135,9 @@ export function AddPersonModal({
           <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
             {/* Photo Section */}
             <View style={styles.photoSection}>
-              {photoUrl ? (
+              {photoUri ? (
                 <View style={styles.photoContainer}>
-                  <Image source={{ uri: photoUrl }} style={styles.photo} contentFit="cover" />
+                  <Image source={{ uri: photoUri }} style={styles.photo} contentFit="cover" />
                   <Pressable onPress={removePhoto} style={styles.removePhotoButton}>
                     <MaterialIcons name="close" size={20} color="#FFFFFF" />
                   </Pressable>
@@ -178,11 +150,11 @@ export function AddPersonModal({
                     { borderColor: colors.icon },
                     pressed && styles.photoPlaceholderPressed,
                   ]}
-                  disabled={isPickingPhoto}
+                  disabled={isPicking}
                 >
                   <MaterialIcons name="add-photo-alternate" size={48} color={colors.icon} />
                   <ThemedText style={[styles.photoPlaceholderText, { color: colors.icon }]}>
-                    {isPickingPhoto ? 'Loading...' : 'Add Photo'}
+                    {isPicking ? 'Loading...' : 'Add Photo'}
                   </ThemedText>
                 </Pressable>
               )}

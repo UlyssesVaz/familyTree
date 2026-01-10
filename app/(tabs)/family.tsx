@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, Modal, Alert, Platform } from 'react-native';
+import { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View, Modal, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -10,17 +10,13 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyFeed, type FeedFilter } from '@/hooks/use-family-feed';
+import { useUpdateManagement } from '@/hooks/use-update-management';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
 import type { Update, Person } from '@/types/family-tree';
 
 export default function FamilyScreen() {
   const insets = useSafeAreaInsets();
-  const [isAddingUpdate, setIsAddingUpdate] = useState(false);
-  const [updateToEdit, setUpdateToEdit] = useState<Update | null>(null);
-  const [expandedUpdateId, setExpandedUpdateId] = useState<string | null>(null);
-  const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'group'>('all');
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
@@ -31,46 +27,25 @@ export default function FamilyScreen() {
   const people = useFamilyTreeStore((state) => state.people);
   const peopleArray = Array.from(people.values());
   const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
-  const deleteUpdate = useFamilyTreeStore((state) => state.deleteUpdate);
   const updateUpdate = useFamilyTreeStore((state) => state.updateUpdate);
   const toggleUpdatePrivacy = useFamilyTreeStore((state) => state.toggleUpdatePrivacy);
 
   // Use custom hook to get filtered family feed updates
   const { updates: allFamilyUpdates } = useFamilyFeed(filter as FeedFilter);
 
-  // Use ref to avoid stale closure in useEffect
-  const deleteUpdateRef = useRef(deleteUpdate);
-  useEffect(() => {
-    deleteUpdateRef.current = deleteUpdate;
-  }, [deleteUpdate]);
-
-  // Show delete alert after menu modal closes
-  useEffect(() => {
-    if (pendingDeleteId && !menuUpdateId) {
-      const updateIdToDelete = pendingDeleteId;
-      setPendingDeleteId(null);
-      
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          Alert.alert(
-            'Delete Update',
-            'Are you sure you want to delete this update?',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: () => {
-                  deleteUpdateRef.current(updateIdToDelete);
-                },
-              },
-            ],
-            { cancelable: true }
-          );
-        }, Platform.OS === 'ios' ? 300 : 100);
-      });
-    }
-  }, [pendingDeleteId, menuUpdateId]);
+  // Use centralized update management hook (handles delete confirmation)
+  const {
+    isAddingUpdate,
+    setIsAddingUpdate,
+    updateToEdit,
+    setUpdateToEdit,
+    expandedUpdateId,
+    setExpandedUpdateId,
+    menuUpdateId,
+    setMenuUpdateId,
+    pendingDeleteId,
+    setPendingDeleteId,
+  } = useUpdateManagement();
 
   const backgroundColor = colors.background;
   const topInset = Platform.OS === 'web' ? 0 : insets.top;

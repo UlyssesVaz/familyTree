@@ -5,8 +5,9 @@
  * Uses @react-native-google-signin/google-signin for native Google Sign-In experience.
  */
 
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -21,6 +22,11 @@ export default function LoginScreen() {
   const colors = Colors[theme];
   const router = useRouter();
   const { isLoading } = useAuth();
+  const insets = useSafeAreaInsets();
+  
+  // iOS best practice: Safe area top inset + additional padding
+  const topPadding = Platform.OS === 'ios' ? Math.max(insets.top, 44) + 20 : insets.top + 20;
+  const bottomPadding = Math.max(insets.bottom, 20);
 
   // Callback when Google sign-in succeeds
   // The auth context will automatically detect the session change via onAuthStateChanged
@@ -36,6 +42,7 @@ export default function LoginScreen() {
 
   return (
     <ThemedView style={styles.container}>
+      <View style={[styles.topSpacer, { height: topPadding }]} />
       <View style={styles.content}>
         {/* Header */}
         <View style={styles.header}>
@@ -63,6 +70,7 @@ export default function LoginScreen() {
           </ThemedText>
         </View>
       </View>
+      <View style={[styles.bottomSpacer, { height: bottomPadding }]} />
     </ThemedView>
   );
 }
@@ -71,11 +79,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  topSpacer: {
+    // Height set dynamically based on safe area insets
+  },
+  bottomSpacer: {
+    // Height set dynamically based on safe area insets
+  },
   content: {
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 24,
-    paddingVertical: 48,
   },
   header: {
     alignItems: 'center',
