@@ -18,6 +18,7 @@ import * as Linking from 'expo-linking';
 export class SupabaseAuthService implements AuthService {
   private supabase: ReturnType<typeof getSupabaseClient> | null = null;
   private authStateUnsubscribe: (() => void) | null = null;
+  private isSigningOut: boolean = false; // Flag to prevent auto-restore during sign out
 
   // Lazy getter for Supabase client to prevent crashes if credentials are missing
   private getSupabase() {
@@ -164,24 +165,41 @@ export class SupabaseAuthService implements AuthService {
 
   async signOut(): Promise<void> {
     try {
+      // Set flag to prevent auto-restore during sign out
+      this.isSigningOut = true;
+      
       const supabase = this.getSupabase();
       
-      // Sign out from Supabase first
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-
-      // Optionally sign out from Google Sign-In SDK as well
-      // This clears cached credentials locally for a complete sign-out
+      // Sign out from Google Sign-In SDK FIRST (clears cached credentials)
+      // This prevents auto-sign-in when Supabase checks for existing session
       try {
         const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
         await GoogleSignin.signOut();
-        console.log('[SupabaseAuth] Also signed out from Google Sign-In SDK');
+        console.log('[SupabaseAuth] Signed out from Google Sign-In SDK - cached credentials cleared');
       } catch (googleError) {
-        // If Google Sign-In sign-out fails, log but don't throw
-        // The Supabase sign-out is what matters for app authentication
+        // If Google Sign-In sign-out fails, log but continue
+        // We still want to sign out from Supabase
         console.warn('[SupabaseAuth] Failed to sign out from Google Sign-In SDK:', googleError);
       }
+      
+      // Sign out from Supabase (clears session from AsyncStorage)
+      // This removes the stored session token, preventing auto-restore
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+      
+      console.log('[SupabaseAuth] Signed out from Supabase - session cleared from AsyncStorage');
+      
+      // Verify session is actually cleared (defensive check)
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        console.warn('[SupabaseAuth] WARNING: Session still exists after signOut. This should not happen.');
+      }
+      
+      // Clear flag after sign out completes
+      this.isSigningOut = false;
     } catch (error: any) {
+      // Clear flag even on error
+      this.isSigningOut = false;
       throw this.handleError(error);
     }
   }
@@ -205,6 +223,22 @@ export class SupabaseAuthService implements AuthService {
       const supabase = this.getSupabase();
       const { data: { subscription } } = supabase.auth.onAuthStateChange(
         async (event, session) => {
+          // Handle SIGNED_OUT event explicitly - always clear session
+          if (event === 'SIGNED_OUT') {
+            this.isSigningOut = false; // Reset flag
+            callback(null);
+            return;
+          }
+          
+          // If we're in the middle of signing out, ignore any session restorations
+          // This prevents auto-restore from AsyncStorage during sign out
+          if (this.isSigningOut) {
+            console.log('[SupabaseAuth] Ignoring auth state change during sign out:', event);
+            callback(null);
+            return;
+          }
+          
+          // For all other events, use session state
           if (session) {
             callback(this.supabaseSessionToAuthSession(session));
           } else {

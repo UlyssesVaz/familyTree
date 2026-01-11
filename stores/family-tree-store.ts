@@ -21,6 +21,9 @@ interface FamilyTreeStore {
   /** Initialize the ego (focal person) */
   initializeEgo: (name: string, birthDate?: string, gender?: Person['gender'], userId?: string) => void;
   
+  /** Load a complete Person object as the ego (used when loading from database) */
+  loadEgo: (person: Person) => void;
+  
   /** Update ego's profile information */
   updateEgo: (updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>) => void;
   
@@ -116,6 +119,16 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     set({
       people: newPeople,
       egoId: id,
+    });
+  },
+
+  loadEgo: (person) => {
+    const newPeople = new Map(get().people);
+    newPeople.set(person.id, person);
+
+    set({
+      people: newPeople,
+      egoId: person.id,
     });
   },
 

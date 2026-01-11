@@ -17,6 +17,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { ProfileFormFields, ProfileFormData } from '@/components/family-tree/ProfileFormFields';
+import { createEgoProfile } from '@/services/supabase/people-api';
 
 export default function ProfileSetupScreen() {
   const colorScheme = useColorScheme();
@@ -24,7 +25,6 @@ export default function ProfileSetupScreen() {
   const colors = Colors[theme];
   const router = useRouter();
   const { session } = useAuth();
-  const initializeEgo = useFamilyTreeStore((state) => state.initializeEgo);
   const userId = session?.user?.id;
   const [formData, setFormData] = useState<ProfileFormData>({
     name: session?.user.name || '',
@@ -41,29 +41,37 @@ export default function ProfileSetupScreen() {
       return;
     }
 
+    if (!userId) {
+      Alert.alert('Error', 'User not authenticated. Please sign in again.');
+      return;
+    }
+
     setIsSaving(true);
     try {
-      // Initialize ego with profile data
-      initializeEgo(
-        formData.name.trim(),
-        formData.birthDate || undefined,
-        formData.gender,
-        userId // Link ego to current user
-      );
+      // Create ego profile in Supabase (atomic operation)
+      const createdPerson = await createEgoProfile(userId, {
+        name: formData.name.trim(),
+        birthDate: formData.birthDate || undefined,
+        gender: formData.gender,
+        photoUrl: formData.photoUrl,
+        bio: formData.bio,
+      });
 
-      // Update ego with photo and bio if provided
-      if (formData.photoUrl || formData.bio) {
-        const updateEgo = useFamilyTreeStore.getState().updateEgo;
-        updateEgo({
-          photoUrl: formData.photoUrl,
-          bio: formData.bio,
-        });
-      }
+      // Load the created person into Zustand store
+      useFamilyTreeStore.getState().loadEgo(createdPerson);
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:61',message:'Profile created and loaded',data:{personId:createdPerson.id,userId,personCreatedBy:createdPerson.createdBy},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
 
-      // Move to next step
+      // Move to next step (only after successful 201 Created response)
       router.push('/(onboarding)/location');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save profile. Please try again.');
+    } catch (error: any) {
+      console.error('[ProfileSetup] Error creating profile:', error);
+      Alert.alert(
+        'Error',
+        error.message || 'Failed to save profile. Please try again.'
+      );
     } finally {
       setIsSaving(false);
     }

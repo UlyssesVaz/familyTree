@@ -172,7 +172,6 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const egoId = useFamilyTreeStore((state) => state.egoId);
-  const initializeEgo = useFamilyTreeStore((state) => state.initializeEgo);
   
   // Use the custom hook to get all tree layout calculations
   // This hook encapsulates all the complex tree traversal logic
@@ -187,13 +186,11 @@ export default function HomeScreen() {
   const [selectedRelativeType, setSelectedRelativeType] = useState<RelativeType | null>(null);
   const [selectedPerson, setSelectedPerson] = useState<Person | null>(null); // Track which person we're adding to
 
-  // Temporary: Initialize ego if it doesn't exist (for testing)
-  // TODO: Replace with onboarding flow later
-  useEffect(() => {
-    if (!ego) {
-      initializeEgo('You', '2000-01-01', 'other');
-    }
-  }, [ego, initializeEgo]);
+  // REMOVED: Demo profile initialization
+  // This was leftover test code. Ego should only come from:
+  // 1. Database (via getUserProfile after authentication)
+  // 2. Onboarding flow (via createEgoProfile)
+  // Never create demo/test profiles - always require proper authentication and onboarding
 
   const handleEgoCardPress = () => {
     // Navigate to profile tab when ego card is clicked

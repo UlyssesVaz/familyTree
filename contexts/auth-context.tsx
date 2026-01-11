@@ -10,6 +10,7 @@ import { useRouter, useSegments } from 'expo-router';
 import { AuthSession, AuthProvider as AuthProviderType, AuthError } from '@/services/auth/types';
 import { getAuthService } from '@/services/auth';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { getUserProfile } from '@/services/supabase/people-api';
 
 interface AuthContextType {
   session: AuthSession | null;
@@ -27,11 +28,15 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCheckingProfile, setIsCheckingProfile] = useState(false);
   const [error, setError] = useState<AuthError | null>(null);
   const router = useRouter();
   const segments = useSegments();
   const authService = useRef(getAuthService());
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const profileCheckRef = useRef<Promise<void> | null>(null);
+  const initialRoutingDoneRef = useRef(false); // Track if initial routing decision has been made
+  const previousSessionRef = useRef<AuthSession | null>(null); // Track previous session state for sign-in detection
 
   // Initialize auth state
   useEffect(() => {
@@ -67,8 +72,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Subscribe to auth state changes
     unsubscribeRef.current = authService.current.onAuthStateChanged((newSession) => {
       if (mounted) {
+        // CRITICAL FIX #1: Reset routing flag when session becomes truthy (sign-in)
+        // This ensures profile check always has permission to redirect after sign-in
+        // Use ref to track previous session (callback closure may have stale state)
+        if (newSession && !previousSessionRef.current) {
+          // Session just became truthy (sign-in happened)
+          initialRoutingDoneRef.current = false;
+        }
+        
+        // Update ref to track session state for next callback
+        previousSessionRef.current = newSession;
+        
         setSession(newSession);
         setIsLoading(false);
+        
+        // If session becomes null (sign out), clear ego immediately
+        if (!newSession) {
+          const ego = useFamilyTreeStore.getState().getEgo();
+          if (ego) {
+            useFamilyTreeStore.getState().clearEgo();
+          }
+        }
       }
     });
 
@@ -80,78 +104,137 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Routing guard: redirect based on auth state
+  // Check user profile after authentication (handles race conditions)
   useEffect(() => {
-    if (isLoading) return; // Wait for auth check to complete
+    // Wait for auth to complete before checking profile
+    if (isLoading || !session) {
+      return;
+    }
+
+    // Prevent multiple simultaneous profile checks
+    if (isCheckingProfile || profileCheckRef.current) {
+      return;
+    }
+
+    const checkProfile = async () => {
+      setIsCheckingProfile(true);
+      
+      try {
+        const profile = await getUserProfile(session.user.id);
+        
+        if (profile) {
+          // User has profile → Load into Zustand
+          useFamilyTreeStore.getState().loadEgo(profile);
+          
+          // Profile exists → Make initial routing decision (ONLY ONCE)
+          if (!initialRoutingDoneRef.current) {
+            initialRoutingDoneRef.current = true;
+            // Verify ego belongs to current user
+            const currentUserId = session.user.id;
+            const egoId = profile.id;
+            const isEgoForCurrentUser = !!(egoId && egoId === currentUserId) || !!(profile.createdBy && profile.createdBy === currentUserId);
+            
+            if (isEgoForCurrentUser) {
+              // Returning user with their profile - go to tabs
+              // CRITICAL FIX #3: Use setTimeout to ensure navigation happens after Expo Router is ready
+              // Prevents navigation from being cancelled by expo-router's internal layout mounting logic
+              setTimeout(() => {
+                router.replace('/(tabs)');
+              }, 0);
+            } else {
+              // Ego doesn't belong to user - clear and go to onboarding
+              useFamilyTreeStore.getState().clearEgo();
+              setTimeout(() => {
+                router.replace('/(onboarding)/welcome');
+              }, 0);
+            }
+          }
+        } else {
+          // No profile found → New user, clear any stale ego data
+          useFamilyTreeStore.getState().clearEgo();
+          
+          // No profile → Make initial routing decision (ONLY ONCE)
+          if (!initialRoutingDoneRef.current) {
+            initialRoutingDoneRef.current = true;
+            // CRITICAL FIX #3: Use setTimeout to ensure navigation happens after Expo Router is ready
+            setTimeout(() => {
+              router.replace('/(onboarding)/welcome');
+            }, 0);
+          }
+        }
+      } catch (err: any) {
+        console.error('[AuthContext] Error checking user profile:', err);
+        // Treat error as new user (safe fallback)
+        useFamilyTreeStore.getState().clearEgo();
+      } finally {
+        setIsCheckingProfile(false);
+        profileCheckRef.current = null;
+      }
+    };
+
+    profileCheckRef.current = checkProfile();
+  }, [session, isLoading, isCheckingProfile]);
+
+  // Routing guard: ONLY protects tabs access (security) and handles unauthenticated users
+  // Initial routing decision is made in profile check useEffect (runs once)
+  // NOTE: We use useSegments() inside the effect, not in dependencies, to avoid constant re-runs
+  useEffect(() => {
+    // Wait for auth check to complete
+    if (isLoading) {
+      return;
+    }
 
     const firstSegment = segments[0];
     const inAuthGroup = firstSegment === '(auth)';
-    const inOnboardingGroup = firstSegment === '(onboarding)';
     const inTabsGroup = firstSegment === '(tabs)';
-    const hasNoRoute = segments.length === 0 || !firstSegment || firstSegment === 'index';
+    const inOnboardingGroup = firstSegment === '(onboarding)';
 
     if (!session) {
       // NOT AUTHENTICATED: Must go to login first
+      // Clear any stale ego data when not authenticated
+      const ego = useFamilyTreeStore.getState().getEgo();
+      if (ego) {
+        useFamilyTreeStore.getState().clearEgo();
+      }
+      
+      // Redirect to login if not already there
       if (!inAuthGroup) {
-        // Not on login screen, redirect to login
-        // This handles: empty segments, onboarding screens, tabs, etc.
         router.replace('/(auth)/login');
       }
-      // If already on login screen, let them stay
     } else {
-      // AUTHENTICATED: Check onboarding status
-      const ego = useFamilyTreeStore.getState().getEgo();
-      const onboardingComplete = !!ego;
-
-      if (hasNoRoute || inAuthGroup) {
-        // On root or login screen but authenticated - redirect based on onboarding
-        // Check if ego belongs to current user
+      // AUTHENTICATED: Only guard tabs access (security check)
+      // If they somehow get to tabs without a profile, redirect to onboarding
+      if (inTabsGroup) {
+        const ego = useFamilyTreeStore.getState().getEgo();
         const currentUserId = session.user.id;
-        const egoCreatedBy = ego?.createdBy;
-        // If ego has no createdBy, it's from old code - treat as not belonging to user
-        // Only trust ego if it has createdBy matching current user
-        const isEgoForCurrentUser = !!egoCreatedBy && egoCreatedBy === currentUserId;
+        const egoId = ego?.id;
+        const isEgoForCurrentUser = !!(egoId && egoId === currentUserId) || !!(ego?.createdBy && ego.createdBy === currentUserId);
+        const hasValidProfile = !!ego && isEgoForCurrentUser;
         
-        if (onboardingComplete && isEgoForCurrentUser) {
-          // Returning user with their ego - go to app
-          router.replace('/(tabs)');
-        } else {
-          // New user OR ego doesn't belong to current user OR ego has no createdBy - go to onboarding
-          // If ego exists but doesn't belong to user or has no createdBy, clear it first
-          if (ego && (!isEgoForCurrentUser || !egoCreatedBy)) {
-            useFamilyTreeStore.getState().clearEgo();
-          }
-          // Only redirect to welcome if not already on welcome screen (prevent duplicate navigation)
-          if (!inOnboardingGroup || segments[1] !== 'welcome') {
-            router.replace('/(onboarding)/welcome');
-          }
-        }
-      } else if (inTabsGroup && !onboardingComplete) {
-        // Trying to access main app but onboarding not complete
-        // Only redirect if not already on welcome screen
-        if (!inOnboardingGroup || segments[1] !== 'welcome') {
+        if (!hasValidProfile) {
+          // Trying to access tabs without valid profile - redirect to onboarding
+          useFamilyTreeStore.getState().clearEgo();
           router.replace('/(onboarding)/welcome');
         }
+      } else if (inAuthGroup) {
+        // User is authenticated but still on login screen - profile check useEffect should handle navigation
+        // Don't redirect here - let profile check useEffect handle it after checking profile
       }
-      // If in onboarding group and already on a valid onboarding screen, let them navigate through it (no redirect)
+      // Otherwise, let them navigate freely (onboarding flow, etc.)
     }
-  }, [session, isLoading, segments, router]);
+    // Only depend on session and isLoading - segments accessed inside effect to avoid constant re-runs
+  }, [session, isLoading, router]);
 
   const signInWithProvider = async (provider: AuthProviderType) => {
     try {
       setError(null);
       
-      // Check ego before sign in
-      const egoBeforeSignIn = useFamilyTreeStore.getState().getEgo();
+      // Clear any existing ego before sign in (will be reloaded from database if exists)
+      useFamilyTreeStore.getState().clearEgo();
       
       const newSession = await authService.current.signInWithProvider(provider);
       
-      // If ego exists but doesn't belong to this user, clear it
-      const currentUserId = newSession?.user?.id;
-      if (egoBeforeSignIn && egoBeforeSignIn.createdBy && egoBeforeSignIn.createdBy !== currentUserId) {
-        useFamilyTreeStore.getState().clearEgo();
-      }
-      
+      // Session will trigger profile check in useEffect
       setSession(newSession);
     } catch (err: any) {
       setError(err);
@@ -184,18 +267,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     try {
       setError(null);
-      await authService.current.signOut();
-      // Clear ego when signing out (fresh start for next login)
+      
+      // Clear local state FIRST (before sign out completes)
+      // This prevents any race conditions where auth state listener might restore session
       useFamilyTreeStore.getState().clearEgo();
-      // Clear session - routing guard will handle navigation to login
+      initialRoutingDoneRef.current = false;
+      setSession(null); // Clear session state immediately
+      
+      // Now sign out from services (Google + Supabase)
+      // This clears stored tokens/credentials
+      await authService.current.signOut();
+      
+      // Double-check: Ensure session is null after sign out
+      // The auth state listener should fire, but we set it explicitly here too
+      const currentSession = await authService.current.getCurrentSession();
+      if (currentSession) {
+        console.warn('[AuthContext] Session still exists after signOut, forcing clear');
+        setSession(null);
+      }
+      
+      // Ensure session state is null
       setSession(null);
-      // Don't manually navigate - let the routing guard handle it to avoid duplicate navigations
+      
+      // Manually redirect to login after sign out completes
+      // This ensures immediate navigation rather than waiting for routing guard to react
+      // The routing guard will also handle this, but explicit navigation is more reliable
+      router.replace('/(auth)/login');
     } catch (err: any) {
       setError(err);
-      // Don't throw - let the routing guard handle navigation
       // Clear session anyway to ensure sign out completes
       useFamilyTreeStore.getState().clearEgo();
+      initialRoutingDoneRef.current = false;
       setSession(null);
+      
+      // Redirect to login even on error (user should be logged out)
+      router.replace('/(auth)/login');
     }
   };
 

@@ -18,6 +18,7 @@ import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { useAuth } from '@/contexts/auth-context';
 import { locationService, LocationData } from '@/services/location-service';
+import { uploadImage, STORAGE_BUCKETS } from '@/services/supabase/storage-api';
 import type { Update, Person } from '@/types/family-tree';
 
 export default function ProfileScreen() {
@@ -33,7 +34,7 @@ export default function ProfileScreen() {
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
-  const { signOut } = useAuth();
+  const { signOut, session } = useAuth();
   
   const ego = useFamilyTreeStore((state) => state.getEgo());
   const egoId = useFamilyTreeStore((state) => state.egoId);
@@ -43,7 +44,49 @@ export default function ProfileScreen() {
   const isEgo = true; // Always true for profile tab
   const countAncestors = useFamilyTreeStore((state) => state.countAncestors);
   const countDescendants = useFamilyTreeStore((state) => state.countDescendants);
-  const updateEgo = useFamilyTreeStore((state) => state.updateEgo);
+  const updateEgoStore = useFamilyTreeStore((state) => state.updateEgo);
+  
+  // Handle profile updates with photo upload if needed
+  const handleUpdateEgo = async (updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>) => {
+    try {
+      let photoUrl = updates.photoUrl;
+      
+      // If photoUrl is a local file URI, upload it to Supabase Storage first
+      if (photoUrl?.startsWith('file://')) {
+        if (!session?.user?.id) {
+          console.error('[Profile] Cannot upload photo: No user session');
+          return;
+        }
+        
+        try {
+          const uploadedUrl = await uploadImage(
+            photoUrl,
+            STORAGE_BUCKETS.PERSON_PHOTOS,
+            `profiles/${session.user.id}`
+          );
+          
+          if (uploadedUrl) {
+            photoUrl = uploadedUrl;
+          } else {
+            console.warn('[Profile] Photo upload returned null, continuing without photo');
+            photoUrl = undefined;
+          }
+        } catch (error: any) {
+          console.error('[Profile] Error uploading photo:', error);
+          // Continue without photo - user can try again
+          photoUrl = undefined;
+        }
+      }
+      
+      // Update state with uploaded URL (or original if it was already a remote URL)
+      updateEgoStore({
+        ...updates,
+        photoUrl,
+      });
+    } catch (error: any) {
+      console.error('[Profile] Error updating profile:', error);
+    }
+  };
   const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
   const toggleUpdatePrivacy = useFamilyTreeStore((state) => state.toggleUpdatePrivacy);
   const updateUpdate = useFamilyTreeStore((state) => state.updateUpdate);
@@ -108,7 +151,7 @@ export default function ProfileScreen() {
         // Remove old location if exists
         const bioWithoutLocation = currentBio.replace(/📍\s*[^\n]+/g, '').trim();
         const newBio = bioWithoutLocation ? `${bioWithoutLocation}\n\n${locationText}` : locationText;
-        updateEgo({ bio: newBio });
+        updateEgoStore({ bio: newBio });
       } else {
         // Location permission denied or failed - offer manual input
         Alert.alert(
@@ -153,7 +196,7 @@ export default function ProfileScreen() {
     // Remove old location if exists
     const bioWithoutLocation = currentBio.replace(/📍\s*[^\n]+/g, '').trim();
     const newBio = bioWithoutLocation ? `${bioWithoutLocation}\n\n${locationText}` : locationText;
-    updateEgo({ bio: newBio });
+    updateEgoStore({ bio: newBio });
     
     setShowLocationInput(false);
     setManualLocationText('');
@@ -616,7 +659,7 @@ export default function ProfileScreen() {
             person={person}
             visible={isEditing}
             onClose={() => setIsEditing(false)}
-            onSave={updateEgo}
+            onSave={handleUpdateEgo}
           />
           {/* Manual Location Input Modal */}
           <Modal
