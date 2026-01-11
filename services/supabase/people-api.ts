@@ -247,3 +247,142 @@ export async function createEgoProfile(
   
   return person;
 }
+
+/**
+ * Update user's profile (ego) in Supabase
+ * 
+ * IMPORTANT: 
+ * - Only allows updating the profile that matches the userId (security check)
+ * - Uploads local photos to Supabase Storage before saving to database
+ * - Updates updated_at timestamp automatically
+ * 
+ * @param userId - The authenticated user's ID from auth.users (required for security)
+ * @param updates - Partial Person data to update (only fields that can be updated)
+ * @returns Updated Person object
+ * @throws Error if update fails or user doesn't own the profile
+ */
+export async function updateEgoProfile(
+  userId: string,
+  updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>
+): Promise<Person> {
+  const supabase = getSupabaseClient();
+  
+  // STEP 0: Verify profile exists and user owns it
+  const existingProfile = await getUserProfile(userId);
+  if (!existingProfile) {
+    throw new Error('Profile not found. Please create a profile first.');
+  }
+  
+  // Security check: Ensure user_id matches (user can only update their own profile)
+  if (existingProfile.id !== userId && existingProfile.createdBy !== userId) {
+    throw new Error('Unauthorized: You can only update your own profile.');
+  }
+  
+  // STEP 1: Upload photo to Supabase Storage if it's a local file URI
+  // This must complete BEFORE we save to database
+  let photoUrl = updates.photoUrl;
+  
+  if (photoUrl?.startsWith('file://')) {
+    try {
+      // Upload local file to Supabase Storage
+      const uploadedUrl = await uploadImage(
+        photoUrl,
+        STORAGE_BUCKETS.PERSON_PHOTOS,
+        `profiles/${userId}` // Organize by user ID
+      );
+      
+      if (uploadedUrl) {
+        photoUrl = uploadedUrl; // Use uploaded URL instead of local URI
+      } else {
+        console.warn('[People API] Photo upload returned null, keeping existing photo');
+        // Don't update photo_url if upload failed - keep existing
+        photoUrl = undefined;
+      }
+    } catch (error: any) {
+      console.error('[People API] Error uploading photo:', error);
+      // Don't fail the entire update if photo upload fails
+      // Keep existing photo - user can try again
+      photoUrl = undefined;
+    }
+  }
+  
+  // STEP 2: Prepare update object (only include fields that are being updated)
+  // Map TypeScript types to PostgreSQL schema
+  const updateRow: Partial<PeopleRow> = {};
+  
+  if (updates.name !== undefined) {
+    updateRow.name = updates.name.trim();
+  }
+  if (updates.bio !== undefined) {
+    updateRow.bio = updates.bio || null; // Allow clearing bio
+  }
+  if (updates.birthDate !== undefined) {
+    updateRow.birth_date = updates.birthDate || null; // Allow clearing birth date
+  }
+  if (updates.gender !== undefined) {
+    updateRow.gender = updates.gender || null; // Allow clearing gender
+  }
+  if (photoUrl !== undefined) {
+    // Only update photo_url if we have a new value (either uploaded or remote URL)
+    // If photoUrl is undefined, it means upload failed - don't update the field
+    if (photoUrl !== null) {
+      updateRow.photo_url = photoUrl;
+    }
+    // If photoUrl is null, we're explicitly clearing it
+    else {
+      updateRow.photo_url = null;
+    }
+  }
+  
+  // Don't update updated_at manually - let database handle it with DEFAULT NOW()
+  // But we can explicitly set it if your schema requires it
+  // updateRow.updated_at = new Date().toISOString();
+  
+  // STEP 3: Update database row (only update fields that changed)
+  // Use user_id to identify the row (more reliable than id)
+  const { data, error } = await supabase
+    .from('people')
+    .update(updateRow)
+    .eq('user_id', userId) // Security: Only update if user_id matches
+    .select()
+    .single();
+  
+  if (error) {
+    console.error('[People API] Error updating ego profile:', error);
+    throw new Error(`Failed to update profile: ${error.message}`);
+  }
+  
+  if (!data) {
+    throw new Error('Failed to update profile: No data returned');
+  }
+  
+  // STEP 4: Map database response to Person type
+  const personId = data.id || data.user_id;
+  if (!personId) {
+    console.error('[People API] No id or user_id found in update response:', data);
+    throw new Error('Database response missing identifier');
+  }
+  
+  const person: Person = {
+    id: personId,
+    name: data.name,
+    birthDate: data.birth_date || undefined,
+    deathDate: data.death_date || undefined,
+    gender: (data.gender as Gender) || undefined,
+    photoUrl: data.photo_url || undefined,
+    bio: data.bio || undefined,
+    phoneNumber: data.phone_number || undefined,
+    parentIds: existingProfile.parentIds, // Keep existing relationships
+    spouseIds: existingProfile.spouseIds,
+    childIds: existingProfile.childIds,
+    siblingIds: existingProfile.siblingIds,
+    createdAt: existingProfile.createdAt, // Keep original creation time
+    updatedAt: new Date(data.updated_at).getTime(), // Use new updated_at from database
+    createdBy: data.created_by || undefined,
+    updatedBy: (data as any).updated_by || undefined, // Optional column
+    version: ((data as any).version || existingProfile.version) + 1, // Increment version if column exists
+    hiddenTaggedUpdateIds: existingProfile.hiddenTaggedUpdateIds, // Keep existing hidden updates
+  };
+  
+  return person;
+}

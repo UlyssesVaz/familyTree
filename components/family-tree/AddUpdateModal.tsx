@@ -10,7 +10,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { parseMentions, getMentionString } from '@/utils/mentions';
-import type { Update } from '@/types/family-tree';
+import type { Update, Person } from '@/types/family-tree';
 
 interface AddUpdateModalProps {
   /** Whether modal is visible */
@@ -57,36 +57,74 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
 
   // Populate form when editing or when initialTaggedPersonIds is provided
   useEffect(() => {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AddUpdateModal.tsx:59',message:'useEffect triggered - form reset check',data:{visible,isEditMode:!!updateToEdit,hasInitialTags:!!initialTaggedPersonIds,peopleSize:people.size,currentTitle:title,currentPhotoUri:!!photoUri,currentCaption:caption.substring(0,20)},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    
     if (updateToEdit) {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AddUpdateModal.tsx:62',message:'Edit mode - populating form',data:{updateId:updateToEdit.id},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       setTitle(updateToEdit.title);
       setPhotoUri(updateToEdit.photoUrl);
       setCaption(updateToEdit.caption || '');
       setIsPublic(updateToEdit.isPublic);
     } else {
-      // Reset form when not editing
-      setTitle('');
-      setPhotoUri(null);
-      setIsPublic(true);
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AddUpdateModal.tsx:68',message:'Add mode - resetting form',data:{visible,hasInitialTags:!!initialTaggedPersonIds,willClearTitle:true,willClearPhoto:true,willClearCaption:true},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       
-      // Auto-populate caption with mentions if initialTaggedPersonIds is provided
-      if (initialTaggedPersonIds && initialTaggedPersonIds.length > 0 && visible) {
-        const allPeople = Array.from(people.values());
-        const mentions = initialTaggedPersonIds
-          .map(id => {
-            const person = allPeople.find(p => p.id === id);
-            if (person) {
-              return `@${getMentionString(person, allPeople, personId)}`;
-            }
-            return null;
-          })
-          .filter(Boolean)
-          .join(' ');
-        setCaption(mentions ? `${mentions} ` : '');
+      // CRITICAL FIX: Only reset form when modal becomes visible (not on every people change)
+      // This prevents clearing user input when people Map reference changes
+      if (visible) {
+        // Only reset if form is actually empty (user hasn't started typing)
+        // This prevents clearing user input mid-typing
+        const formIsEmpty = !title && !photoUri && !caption;
+        
+        if (formIsEmpty) {
+          // #region agent log
+          fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AddUpdateModal.tsx:75',message:'Form is empty - resetting',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
+          setTitle('');
+          setPhotoUri(null);
+          setIsPublic(true);
+          
+          // Auto-populate caption with mentions if initialTaggedPersonIds is provided
+          if (initialTaggedPersonIds && initialTaggedPersonIds.length > 0) {
+            const allPeople = Array.from(people.values());
+            const mentions = initialTaggedPersonIds
+              .map(id => {
+                const person = allPeople.find(p => p.id === id);
+                if (person) {
+                  return `@${getMentionString(person, allPeople, personId)}`;
+                }
+                return null;
+              })
+              .filter(Boolean)
+              .join(' ');
+            setCaption(mentions ? `${mentions} ` : '');
+          } else {
+            setCaption('');
+          }
+        } else {
+          // #region agent log
+          fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AddUpdateModal.tsx:95',message:'Form has data - NOT resetting to preserve user input',data:{hasTitle:!!title,hasPhoto:!!photoUri,hasCaption:!!caption},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
+        }
       } else {
+        // Modal is closing - reset form for next time
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AddUpdateModal.tsx:100',message:'Modal closing - resetting form',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        setTitle('');
+        setPhotoUri(null);
         setCaption('');
+        setIsPublic(true);
       }
     }
-  }, [updateToEdit, visible, initialTaggedPersonIds, people, personId]);
+    // Remove 'people' from dependencies - we only need it for initialTaggedPersonIds logic
+    // Access people inside the effect when needed, but don't re-run on every people change
+  }, [updateToEdit, visible, initialTaggedPersonIds, personId]);
 
   const requestPermissions = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -274,7 +312,12 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
                 },
               ]}
               value={title}
-              onChangeText={setTitle}
+              onChangeText={(text) => {
+                // #region agent log
+                fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AddUpdateModal.tsx:277',message:'Title onChangeText',data:{newText:text.substring(0,20),oldText:title.substring(0,20)},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'C'})}).catch(()=>{});
+                // #endregion
+                setTitle(text);
+              }}
               placeholder="Enter a title for this update"
               placeholderTextColor={colors.icon}
             />

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Person, Update } from '@/types/family-tree';
+import { createUpdate } from '@/services/supabase/updates-api';
 
 /**
  * Minimal Family Tree Store
@@ -43,7 +44,7 @@ interface FamilyTreeStore {
   countDescendants: (personId: string) => number;
   
   /** Add an update (photo) to a person's profile */
-  addUpdate: (personId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => string;
+  addUpdate: (personId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[], userId?: string) => Promise<string>;
   
   /** Update an existing update */
   updateUpdate: (updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => void;
@@ -219,12 +220,13 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     return count;
   },
 
-  addUpdate: (personId, title, photoUrl, caption, isPublic = true, taggedPersonIds = []) => {
-    const id = uuidv4();
+  addUpdate: async (personId, title, photoUrl, caption, isPublic = true, taggedPersonIds = [], userId) => {
+    // Optimistic update: Add to store immediately for instant UI feedback
+    const tempId = uuidv4();
     const now = Date.now();
     
-    const update: Update = {
-      id,
+    const optimisticUpdate: Update = {
+      id: tempId,
       personId,
       title,
       photoUrl,
@@ -236,10 +238,40 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
 
     const oldUpdates = get().updates;
     const newUpdates = new Map(oldUpdates);
-    newUpdates.set(id, update);
-
+    newUpdates.set(tempId, optimisticUpdate);
     set({ updates: newUpdates });
-    return id;
+
+    // If no userId provided, skip database save (fallback to local-only)
+    if (!userId) {
+      console.warn('[FamilyTreeStore] addUpdate called without userId - saving to local state only');
+      return tempId;
+    }
+
+    try {
+      // Save to database via API (handles photo upload)
+      const createdUpdate = await createUpdate(userId, {
+        personId,
+        title,
+        photoUrl,
+        caption,
+        isPublic,
+        taggedPersonIds,
+      });
+
+      // Replace optimistic update with real one from database
+      const finalUpdates = new Map(oldUpdates);
+      finalUpdates.delete(tempId); // Remove temporary update
+      finalUpdates.set(createdUpdate.id, createdUpdate); // Add real update
+      set({ updates: finalUpdates });
+
+      return createdUpdate.id;
+    } catch (error: any) {
+      console.error('[FamilyTreeStore] Error saving update to database:', error);
+      
+      // Keep optimistic update on error (user sees it, but it's not persisted)
+      // In future, could show error toast and remove optimistic update
+      return tempId;
+    }
   },
 
   updateUpdate: (updateId, title, photoUrl, caption, isPublic, taggedPersonIds = []) => {

@@ -19,6 +19,7 @@ import { getGenderColor } from '@/utils/gender-utils';
 import { useAuth } from '@/contexts/auth-context';
 import { locationService, LocationData } from '@/services/location-service';
 import { uploadImage, STORAGE_BUCKETS } from '@/services/supabase/storage-api';
+import { updateEgoProfile } from '@/services/supabase/people-api';
 import type { Update, Person } from '@/types/family-tree';
 
 export default function ProfileScreen() {
@@ -46,45 +47,40 @@ export default function ProfileScreen() {
   const countDescendants = useFamilyTreeStore((state) => state.countDescendants);
   const updateEgoStore = useFamilyTreeStore((state) => state.updateEgo);
   
-  // Handle profile updates with photo upload if needed
+  // Handle profile updates with photo upload and database save
   const handleUpdateEgo = async (updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>) => {
+    if (!session?.user?.id) {
+      console.error('[Profile] Cannot update profile: No user session');
+      Alert.alert('Error', 'You must be signed in to update your profile.');
+      return;
+    }
+    
     try {
-      let photoUrl = updates.photoUrl;
+      // STEP 1: Update database via API (handles photo upload internally)
+      // The API will:
+      // - Upload photo if it's a local file URI
+      // - Verify user owns the profile (security check)
+      // - Update database row
+      // - Return updated Person object
+      const updatedPerson = await updateEgoProfile(session.user.id, updates);
       
-      // If photoUrl is a local file URI, upload it to Supabase Storage first
-      if (photoUrl?.startsWith('file://')) {
-        if (!session?.user?.id) {
-          console.error('[Profile] Cannot upload photo: No user session');
-          return;
-        }
-        
-        try {
-          const uploadedUrl = await uploadImage(
-            photoUrl,
-            STORAGE_BUCKETS.PERSON_PHOTOS,
-            `profiles/${session.user.id}`
-          );
-          
-          if (uploadedUrl) {
-            photoUrl = uploadedUrl;
-          } else {
-            console.warn('[Profile] Photo upload returned null, continuing without photo');
-            photoUrl = undefined;
-          }
-        } catch (error: any) {
-          console.error('[Profile] Error uploading photo:', error);
-          // Continue without photo - user can try again
-          photoUrl = undefined;
-        }
-      }
-      
-      // Update state with uploaded URL (or original if it was already a remote URL)
+      // STEP 2: Update Zustand store with the response from database
+      // This ensures local state matches database state
       updateEgoStore({
-        ...updates,
-        photoUrl,
+        name: updatedPerson.name,
+        bio: updatedPerson.bio,
+        birthDate: updatedPerson.birthDate,
+        gender: updatedPerson.gender,
+        photoUrl: updatedPerson.photoUrl,
       });
+      
+      console.log('[Profile] Profile updated successfully');
     } catch (error: any) {
       console.error('[Profile] Error updating profile:', error);
+      Alert.alert(
+        'Update Failed',
+        error.message || 'Failed to update profile. Please try again.'
+      );
     }
   };
   const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
@@ -734,9 +730,11 @@ export default function ProfileScreen() {
             }}
             updateToEdit={updateToEdit || undefined}
             personId={egoId || undefined}
-            onAdd={(title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
-              if (egoId) {
-                addUpdate(egoId, title, photoUrl, caption, isPublic, taggedPersonIds);
+            onAdd={async (title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
+              if (egoId && session?.user?.id) {
+                await addUpdate(egoId, title, photoUrl, caption, isPublic, taggedPersonIds, session.user.id);
+              } else {
+                console.error('[Profile] Cannot add update: Missing egoId or session');
               }
             }}
             onEdit={(updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
