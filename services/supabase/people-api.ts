@@ -584,14 +584,16 @@ export async function getAllPeople(): Promise<Person[]> {
           break;
           
         case 'child':
-          // person_one is child of person_two (reverse of parent)
-          const childIds2 = childMap.get(personTwoId) || [];
-          if (!childIds2.includes(personOneId)) {
-            childMap.set(personTwoId, [...childIds2, personOneId]);
+          // CRITICAL FIX: When relationship_type is 'child', person_one is the PARENT, person_two is the CHILD
+          // This matches how addChild stores it: personOneId=parentId, personTwoId=childId, relationshipType='child'
+          // So: person_one (parent) has child person_two (child)
+          const childIds2 = childMap.get(personOneId) || [];
+          if (!childIds2.includes(personTwoId)) {
+            childMap.set(personOneId, [...childIds2, personTwoId]);
           }
-          const parentIds2 = parentMap.get(personOneId) || [];
-          if (!parentIds2.includes(personTwoId)) {
-            parentMap.set(personOneId, [...parentIds2, personTwoId]);
+          const parentIds2 = parentMap.get(personTwoId) || [];
+          if (!parentIds2.includes(personOneId)) {
+            parentMap.set(personTwoId, [...parentIds2, personOneId]);
           }
           break;
           

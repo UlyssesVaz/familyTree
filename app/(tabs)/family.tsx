@@ -13,6 +13,7 @@ import { useFamilyFeed, type FeedFilter } from '@/hooks/use-family-feed';
 import { useUpdateManagement } from '@/hooks/use-update-management';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
+import { useAuth } from '@/contexts/auth-context';
 import type { Update, Person } from '@/types/family-tree';
 
 export default function FamilyScreen() {
@@ -21,6 +22,7 @@ export default function FamilyScreen() {
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
+  const { session } = useAuth();
   
   const ego = useFamilyTreeStore((state) => state.getEgo());
   const egoId = useFamilyTreeStore((state) => state.egoId);
@@ -310,8 +312,14 @@ export default function FamilyScreen() {
             setUpdateToEdit(null);
           }}
           personId={ego.id}
-          onAdd={(title, photoUrl, caption, isPublic, taggedPersonIds) => {
-            addUpdate(ego.id, title, photoUrl, caption, isPublic, taggedPersonIds);
+          onAdd={async (title, photoUrl, caption, isPublic, taggedPersonIds) => {
+            if (!ego?.id || !session?.user?.id) {
+              console.error('[Family] Cannot add update: Missing egoId or session');
+              return;
+            }
+            // Post update on ego's wall (ego.id = user_id in updates table)
+            // created_by will be session.user.id (the authenticated user posting)
+            await addUpdate(ego.id, title, photoUrl, caption, isPublic, taggedPersonIds, session.user.id);
             setIsAddingUpdate(false);
             setUpdateToEdit(null);
           }}

@@ -198,7 +198,6 @@ export async function getUpdatesForPerson(personId: string): Promise<Update[]> {
     .from('updates')
     .select('*')
     .eq('user_id', personId)
-    .is('deleted_at', null) // Exclude soft-deleted updates
     .order('created_at', { ascending: false }); // Newest first
   
   if (updatesError) {
@@ -246,7 +245,77 @@ export async function getUpdatesForPerson(personId: string): Promise<Update[]> {
       taggedPersonIds: tagsMap.get(row.updates_id) || undefined,
       createdAt: new Date(row.created_at).getTime(),
       createdBy: row.created_by, // The user who created this update
-      deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : undefined,
+      deletedAt: undefined, // deleted_at column doesn't exist in current schema
+    };
+  });
+  
+  return updates;
+}
+
+/**
+ * Get all updates for all people in the family tree
+ * 
+ * This function loads all updates from the database, including tags.
+ * Used for initial sync when app starts.
+ * 
+ * @returns Array of all Update objects, sorted by created_at (newest first)
+ * @throws Error if query fails
+ */
+export async function getAllUpdates(): Promise<Update[]> {
+  const supabase = getSupabaseClient();
+  
+  // Query all updates (deleted_at column doesn't exist in current schema)
+  const { data: updatesData, error: updatesError } = await supabase
+    .from('updates')
+    .select('*')
+    .order('created_at', { ascending: false }); // Newest first
+  
+  if (updatesError) {
+    console.error('[Updates API] Error fetching all updates:', updatesError);
+    throw new Error(`Failed to fetch updates: ${updatesError.message}`);
+  }
+  
+  if (!updatesData || updatesData.length === 0) {
+    return []; // No updates found
+  }
+  
+  // Build array of update IDs (UUIDs) for querying tags
+  const updateIds = updatesData.map(u => u.updates_id);
+  
+  // Query update_tags table for all updates
+  const { data: tagsData, error: tagsError } = await supabase
+    .from('update_tags')
+    .select('*')
+    .in('update_id', updateIds);
+  
+  if (tagsError) {
+    console.error('[Updates API] Error fetching update tags:', tagsError);
+    // Don't fail - continue without tags
+  }
+  
+  // Build a map of update_id -> tagged person IDs
+  const tagsMap = new Map<string, string[]>();
+  if (tagsData) {
+    for (const tag of tagsData) {
+      const existing = tagsMap.get(tag.update_id) || [];
+      existing.push(tag.tagged_person_id);
+      tagsMap.set(tag.update_id, existing);
+    }
+  }
+  
+  // Map database rows to Update type
+  const updates: Update[] = updatesData.map((row) => {
+    return {
+      id: row.updates_id, // UUID primary key
+      personId: row.user_id, // The person this update belongs to
+      title: row.title,
+      photoUrl: row.photo_url || '', // Required field, use empty string if null
+      caption: row.caption || undefined,
+      isPublic: row.is_public,
+      taggedPersonIds: tagsMap.get(row.updates_id) || undefined,
+      createdAt: new Date(row.created_at).getTime(),
+      createdBy: row.created_by, // The user who created this update
+      deletedAt: undefined, // deleted_at column doesn't exist in current schema
     };
   });
   

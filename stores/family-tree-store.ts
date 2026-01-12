@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Person, Update } from '@/types/family-tree';
-import { createUpdate, deleteUpdate as deleteUpdateAPI } from '@/services/supabase/updates-api';
+import { createUpdate, deleteUpdate as deleteUpdateAPI, getAllUpdates } from '@/services/supabase/updates-api';
 import { createRelative, getAllPeople } from '@/services/supabase/people-api';
 import { createRelationship } from '@/services/supabase/relationships-api';
 
@@ -932,8 +932,12 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:875',message:'syncFamilyTree entry',data:{userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
     // #endregion
     try {
-      // Load all people and relationships from backend
-      const peopleFromBackend = await getAllPeople();
+      // Load all people, relationships, and updates from backend in parallel
+      const [peopleFromBackend, updatesFromBackend] = await Promise.all([
+        getAllPeople(),
+        getAllUpdates(),
+      ]);
+      
       console.log('[DEBUG] syncFamilyTree: Got people from backend', { 
         peopleCount: peopleFromBackend.length,
         peopleIds: peopleFromBackend.map(p => p.id),
@@ -946,20 +950,37 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
           siblingIds: p.siblingIds.length
         }))
       });
+      console.log('[DEBUG] syncFamilyTree: Got updates from backend', {
+        updatesCount: updatesFromBackend.length,
+        updatesByPerson: updatesFromBackend.reduce((acc, u) => {
+          acc[u.personId] = (acc[u.personId] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>)
+      });
       // #region agent log
       fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:878',message:'syncFamilyTree got people from backend',data:{peopleCount:peopleFromBackend.length,peopleIds:peopleFromBackend.map(p=>p.id),peopleWithRelationships:peopleFromBackend.map(p=>({id:p.id,name:p.name,parentIds:p.parentIds.length,childIds:p.childIds.length,spouseIds:p.spouseIds.length}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:940',message:'syncFamilyTree got updates from backend',data:{updatesCount:updatesFromBackend.length,updatesByPerson:updatesFromBackend.reduce((acc,u)=>{acc[u.personId]=(acc[u.personId]||0)+1;return acc;},{})},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
       // #endregion
-      // Convert array to Map for store
+      
+      // Convert arrays to Maps for store
       const peopleMap = new Map<string, Person>();
       for (const person of peopleFromBackend) {
         peopleMap.set(person.id, person);
       }
       
+      const updatesMap = new Map<string, Update>();
+      for (const update of updatesFromBackend) {
+        updatesMap.set(update.id, update);
+      }
+      
       // Update store with data from backend
-      set({ people: peopleMap });
-      console.log('[DEBUG] syncFamilyTree: Updated store', { storePeopleSize: peopleMap.size });
+      set({ people: peopleMap, updates: updatesMap });
+      console.log('[DEBUG] syncFamilyTree: Updated store', { 
+        storePeopleSize: peopleMap.size,
+        storeUpdatesSize: updatesMap.size 
+      });
       // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:887',message:'syncFamilyTree updated store',data:{storePeopleSize:peopleMap.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:887',message:'syncFamilyTree updated store',data:{storePeopleSize:peopleMap.size,storeUpdatesSize:updatesMap.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
       // #endregion
       
       // Set ego if user has a profile

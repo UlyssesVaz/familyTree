@@ -14,6 +14,7 @@ import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { AddUpdateModal } from '@/components/family-tree';
+import { useAuth } from '@/contexts/auth-context';
 import type { Person, Update } from '@/types/family-tree';
 
 export default function PersonProfileModal() {
@@ -25,6 +26,7 @@ export default function PersonProfileModal() {
   const colors = Colors[theme];
   
   const personId = params.personId;
+  const { session } = useAuth();
   
   const egoId = useFamilyTreeStore((state) => state.egoId);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
@@ -391,17 +393,23 @@ export default function PersonProfileModal() {
             setIsAddingUpdate(false);
           }}
           onAdd={(title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
-            if (!egoId || !personId) return;
+            if (!personId || !session?.user?.id) {
+              console.error('[PersonProfile] Cannot add update: Missing personId or session');
+              return;
+            }
             
-            // Ensure personId is included in taggedPersonIds (in case modal didn't pass it)
+            // Ensure personId is included in taggedPersonIds if they're not already tagged
+            // This is for the "Tagged" indicator on the update card
             const finalTaggedPersonIds = taggedPersonIds && taggedPersonIds.length > 0 
               ? taggedPersonIds.includes(personId) 
                 ? taggedPersonIds 
                 : [...taggedPersonIds, personId]
               : [personId];
             
-            // Create the update with ego as the creator, but tag the target person
-            addUpdate(egoId, title, photoUrl, caption, isPublic, finalTaggedPersonIds);
+            // CRITICAL: Post update on target person's wall (personId = user_id in updates table)
+            // created_by will be session.user.id (the authenticated user posting)
+            // This enables posting updates on anyone's wall, not just the ego user
+            addUpdate(personId, title, photoUrl, caption, isPublic, finalTaggedPersonIds, session.user.id);
             
             // Close modal - update will appear on this person's profile automatically
             setIsAddingUpdate(false);
