@@ -3,6 +3,7 @@ import { StyleSheet, View, Platform, Alert, ScrollView, Dimensions, Share } from
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/auth-context';
+import { createInvitationLink } from '@/services/supabase/invitations-api';
 
 import {
   PersonCard,
@@ -279,9 +280,6 @@ export default function HomeScreen() {
           break;
         case 'sibling':
           await addSibling(selectedPerson.id, newPersonId, userId);
-          if (__DEV__) {
-            console.log(`[Add Sibling] Added sibling relationship between ${selectedPerson.name} and ${data.name}`);
-          }
           break;
       }
 
@@ -292,32 +290,54 @@ export default function HomeScreen() {
 
       // Always offer to send invite via native share
       // Delay to ensure modal is fully closed before showing share sheet
-      setTimeout(() => {
-        const inviteMessage = `Hi ${data.name}! I've added you to our family tree. Join us to see and contribute to our shared family history!\n\n[Invite link will be added here in Phase 3]`;
-        
-        Alert.alert(
-          'Person Added!',
-          `Would you like to send ${data.name} an invite?`,
-          [
-            { text: 'Skip', style: 'cancel' },
-            {
-              text: 'Share Invite',
-              onPress: async () => {
-                try {
-                  // Small delay to ensure alert is dismissed before showing share sheet
-                  setTimeout(async () => {
-                    await Share.share({
-                      message: inviteMessage,
-                      title: `Invite ${data.name} to Family Tree`,
-                    });
-                  }, 300);
-                } catch (error) {
-                  console.error('Error sharing invite:', error);
-                }
+      setTimeout(async () => {
+        try {
+          // Create invitation link for the newly added person
+          const invitation = await createInvitationLink({
+            targetPersonId: newPersonId,
+            userId: userId,
+          });
+
+          // Generate invitation URL
+          // Using app scheme for deep linking (familytreeapp://join/[token])
+          // For web, this would be https://yourdomain.com/join/[token]
+          const inviteUrl = `familytreeapp://join/${invitation.token}`;
+          const inviteMessage = `Hi ${data.name}! I've added you to our family tree. Join us to see and contribute to our shared family history!\n\n${inviteUrl}`;
+          
+          Alert.alert(
+            'Person Added!',
+            `Would you like to send ${data.name} an invite?`,
+            [
+              { text: 'Skip', style: 'cancel' },
+              {
+                text: 'Share Invite',
+                onPress: async () => {
+                  try {
+                    // Small delay to ensure alert is dismissed before showing share sheet
+                    setTimeout(async () => {
+                      await Share.share({
+                        message: inviteMessage,
+                        title: `Invite ${data.name} to Family Tree`,
+                        // Don't include url parameter - it causes duplication on iOS
+                        // The URL is already in the message text
+                      });
+                    }, 300);
+                  } catch (error) {
+                    console.error('Error sharing invite:', error);
+                  }
+                },
               },
-            },
-          ]
-        );
+            ]
+          );
+        } catch (error: any) {
+          console.error('[HomeScreen] Error creating invitation link:', error);
+          // Still show success message, but without invite link
+          Alert.alert(
+            'Person Added!',
+            `${data.name} has been added to your family tree.`,
+            [{ text: 'OK' }]
+          );
+        }
       }, 300);
     } catch (error: any) {
       console.error('[HomeScreen] Error adding person:', error);

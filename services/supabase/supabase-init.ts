@@ -46,7 +46,9 @@ export function initializeSupabase(): SupabaseClient {
       },
     });
 
-    console.log('[Supabase] Initialized successfully');
+    if (__DEV__) {
+      console.log('[Supabase] Initialized successfully');
+    }
     return supabaseClient;
   } catch (error) {
     initializationError = error as Error;

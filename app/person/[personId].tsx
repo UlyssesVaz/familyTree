@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, Modal, Alert, Platform } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View, Modal, Alert, Platform, Share } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -15,6 +15,7 @@ import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { AddUpdateModal } from '@/components/family-tree';
 import { useAuth } from '@/contexts/auth-context';
+import { createInvitationLink } from '@/services/supabase/invitations-api';
 import type { Person, Update } from '@/types/family-tree';
 
 export default function PersonProfileModal() {
@@ -176,9 +177,53 @@ export default function PersonProfileModal() {
 
           {/* Name and Bio */}
           <View style={styles.infoSection}>
-            <ThemedText type="defaultSemiBold" style={styles.displayName}>
-              {person.name}
-            </ThemedText>
+            <View style={styles.nameRow}>
+              <ThemedText type="defaultSemiBold" style={styles.displayName}>
+                {person.name}
+              </ThemedText>
+              {/* Invite button - only show for ancestor profiles (no linkedAuthUserId) */}
+              {!person.linkedAuthUserId && session?.user?.id && (
+                <Pressable
+                  onPress={async () => {
+                    if (!session?.user?.id || !personId) return;
+                    try {
+                      // Create invitation link
+                      const invitation = await createInvitationLink({
+                        targetPersonId: personId,
+                        userId: session.user.id,
+                      });
+
+                      // Generate invitation URL
+                      const inviteUrl = `familytreeapp://join/${invitation.token}`;
+                      const inviteMessage = `Hi ${person.name}! I've added you to our family tree. Join us to see and contribute to our shared family history!\n\n${inviteUrl}`;
+
+                      // Share invitation
+                      await Share.share({
+                        message: inviteMessage,
+                        title: `Invite ${person.name} to Family Tree`,
+                        // Don't include url parameter - it causes duplication on iOS
+                        // The URL is already in the message text
+                      });
+                    } catch (error: any) {
+                      console.error('[PersonProfile] Error creating invitation:', error);
+                      Alert.alert(
+                        'Error',
+                        error?.message || 'Failed to create invitation link. Please try again.',
+                        [{ text: 'OK' }]
+                      );
+                    }
+                  }}
+                  style={({ pressed }) => [
+                    styles.inviteButton,
+                    { backgroundColor: colors.tint },
+                    pressed && styles.inviteButtonPressed,
+                  ]}
+                >
+                  <MaterialIcons name="person-add" size={18} color="#FFFFFF" />
+                  <ThemedText style={styles.inviteButtonText}>Invite</ThemedText>
+                </Pressable>
+              )}
+            </View>
             {person.bio && (
               <ThemedText style={styles.bio}>{person.bio}</ThemedText>
             )}
@@ -497,9 +542,32 @@ const styles = StyleSheet.create({
   infoSection: {
     marginBottom: 24,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 12,
+  },
   displayName: {
     fontSize: 16,
-    marginBottom: 8,
+    flex: 1,
+  },
+  inviteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
+  },
+  inviteButtonPressed: {
+    opacity: 0.7,
+  },
+  inviteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   bio: {
     fontSize: 14,

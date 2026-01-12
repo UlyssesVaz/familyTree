@@ -254,7 +254,9 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
 
     // If no userId provided, skip database save (fallback to local-only)
     if (!userId) {
-      console.warn('[FamilyTreeStore] addUpdate called without userId - saving to local state only');
+      if (__DEV__) {
+        console.warn('[Store] addUpdate called without userId - saving to local state only');
+      }
       return tempId;
     }
 
@@ -377,7 +379,9 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     const { updates } = get();
     const update = updates.get(updateId);
     if (!update) {
-      console.warn(`Update ${updateId} not found for deletion`);
+      if (__DEV__) {
+        console.warn(`[Store] Update ${updateId} not found for deletion`);
+      }
       return;
     }
     
@@ -468,7 +472,9 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
 
     // STEP 2: If no userId provided, skip database save (fallback to local-only)
     if (!userId) {
-      console.warn('[FamilyTreeStore] addPerson called without userId - saving to local state only');
+      if (__DEV__) {
+        console.warn('[Store] addPerson called without userId - saving to local state only');
+      }
       return tempId;
     }
 
@@ -505,41 +511,34 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
   addParent: async (childId, parentId, userId) => {
     // NOTE: childId and parentId should be DB-generated user_ids (not temp IDs)
     // This is ensured because addPerson replaces temp ID with real ID before returning
-    console.log('[DEBUG] addParent: Entry', { childId, parentId, userId, availablePersonIds: Array.from(get().people.keys()) });
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:502',message:'addParent entry',data:{childId,parentId,userId,availablePersonIds:Array.from(get().people.keys())},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
     const { people } = get();
     const child = people.get(childId);
     const parent = people.get(parentId);
 
     if (!child || !parent) {
-      console.warn(`Cannot add parent: child or parent not found. childId: ${childId}, parentId: ${parentId}`);
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:509',message:'addParent person not found',data:{childId,parentId,availablePersonIds:Array.from(people.keys()),childFound:!!child,parentFound:!!parent},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
-      // Log available person IDs for debugging
       if (__DEV__) {
+        console.warn(`Cannot add parent: child or parent not found. childId: ${childId}, parentId: ${parentId}`);
         console.log('[Store] Available person IDs:', Array.from(people.keys()));
       }
       return;
     }
 
     if (childId === parentId) {
-      console.warn(`Cannot add parent: person cannot be their own parent`);
+      if (__DEV__) {
+        console.warn(`[Store] Cannot add parent: person cannot be their own parent`);
+      }
       return;
     }
 
     // Check if relationship already exists
     if (child.parentIds.includes(parentId)) {
-      console.warn(`Parent relationship already exists`);
+      if (__DEV__) {
+        console.warn(`[Store] Parent relationship already exists`);
+      }
       return;
     }
 
     // STEP 1: Optimistic update - update store immediately for instant UI feedback
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:529',message:'addParent before optimistic update',data:{childId,parentId,childParentIds:child.parentIds,parentChildIds:parent.childIds},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
     const updatedChild: Person = {
       ...child,
       parentIds: [...child.parentIds, parentId],
@@ -559,16 +558,6 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     newPeople.set(childId, updatedChild);
     newPeople.set(parentId, updatedParent);
     set({ people: new Map(newPeople) });
-    console.log('[DEBUG] addParent: Optimistic update applied', { 
-      childId, 
-      parentId, 
-      childParentIds: updatedChild.parentIds, 
-      parentChildIds: updatedParent.childIds,
-      storePeopleSize: newPeople.size 
-    });
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:548',message:'addParent after optimistic update',data:{childId,parentId,updatedChildParentIds:updatedChild.parentIds,updatedParentChildIds:updatedParent.childIds,storePeopleSize:newPeople.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     
     if (__DEV__) {
       const childName = updatedChild.name;
@@ -578,15 +567,14 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
 
     // STEP 2: If no userId provided, skip database save (fallback to local-only)
     if (!userId) {
-      console.warn('[FamilyTreeStore] addParent called without userId - saving to local state only');
+      if (__DEV__) {
+        console.warn('[Store] addParent called without userId - saving to local state only');
+      }
       return;
     }
 
     try {
       // STEP 3: Save relationship to database via API
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:563',message:'addParent calling createRelationship',data:{userId,personOneId:parentId,personTwoId:childId,relationshipType:'parent'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
       // Silent background save: Save to database without refetching
       // Follows the same pattern as addUpdate: optimistic update → save to DB → no refetch
       // This prevents UI flicker and saves bandwidth
@@ -596,10 +584,10 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
         personTwoId: childId,
         relationshipType: 'parent',
       });
-      console.log('[DEBUG] addParent: Relationship saved to DB', { relationshipId, parentId, childId });
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:569',message:'addParent createRelationship success',data:{relationshipId,personOneId:parentId,personTwoId:childId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
+      
+      if (__DEV__) {
+        console.log('[Store] Relationship saved to DB', { relationshipId, parentId, childId });
+      }
       
       // NOTE: No refetch after save - optimistic update is sufficient
       // Backend sync happens once on app startup (in auth-context.tsx)
@@ -922,15 +910,13 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
   syncFamilyTree: async (userId) => {
     // Prevent concurrent sync calls - if already syncing, skip
     if (isSyncing) {
-      console.log('[DEBUG] syncFamilyTree: Already syncing, skipping duplicate call');
+      if (__DEV__) {
+        console.log('[Store] syncFamilyTree: Already syncing, skipping duplicate call');
+      }
       return;
     }
     
     isSyncing = true;
-    console.log('[DEBUG] syncFamilyTree: Entry', { userId });
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:875',message:'syncFamilyTree entry',data:{userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     try {
       // Load all people, relationships, and updates from backend in parallel
       const [peopleFromBackend, updatesFromBackend] = await Promise.all([
@@ -938,29 +924,14 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
         getAllUpdates(),
       ]);
       
-      console.log('[DEBUG] syncFamilyTree: Got people from backend', { 
-        peopleCount: peopleFromBackend.length,
-        peopleIds: peopleFromBackend.map(p => p.id),
-        peopleWithRelationships: peopleFromBackend.map(p => ({
-          id: p.id,
-          name: p.name,
-          parentIds: p.parentIds.length,
-          childIds: p.childIds.length,
-          spouseIds: p.spouseIds.length,
-          siblingIds: p.siblingIds.length
-        }))
-      });
-      console.log('[DEBUG] syncFamilyTree: Got updates from backend', {
-        updatesCount: updatesFromBackend.length,
-        updatesByPerson: updatesFromBackend.reduce((acc, u) => {
-          acc[u.personId] = (acc[u.personId] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>)
-      });
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:878',message:'syncFamilyTree got people from backend',data:{peopleCount:peopleFromBackend.length,peopleIds:peopleFromBackend.map(p=>p.id),peopleWithRelationships:peopleFromBackend.map(p=>({id:p.id,name:p.name,parentIds:p.parentIds.length,childIds:p.childIds.length,spouseIds:p.spouseIds.length}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:940',message:'syncFamilyTree got updates from backend',data:{updatesCount:updatesFromBackend.length,updatesByPerson:updatesFromBackend.reduce((acc,u)=>{acc[u.personId]=(acc[u.personId]||0)+1;return acc;},{})},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
+      if (__DEV__) {
+        console.log('[Store] syncFamilyTree: Got people from backend', { 
+          count: peopleFromBackend.length,
+        });
+        console.log('[Store] syncFamilyTree: Got updates from backend', {
+          count: updatesFromBackend.length,
+        });
+      }
       
       // Convert arrays to Maps for store
       const peopleMap = new Map<string, Person>();
@@ -975,13 +946,13 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       
       // Update store with data from backend
       set({ people: peopleMap, updates: updatesMap });
-      console.log('[DEBUG] syncFamilyTree: Updated store', { 
-        storePeopleSize: peopleMap.size,
-        storeUpdatesSize: updatesMap.size 
-      });
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:887',message:'syncFamilyTree updated store',data:{storePeopleSize:peopleMap.size,storeUpdatesSize:updatesMap.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
+      
+      if (__DEV__) {
+        console.log('[Store] syncFamilyTree: Updated store', { 
+          peopleCount: peopleMap.size,
+          updatesCount: updatesMap.size 
+        });
+      }
       
       // Set ego if user has a profile
       const ego = peopleFromBackend.find(p => p.linkedAuthUserId === userId);
@@ -989,7 +960,9 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
         set({ egoId: ego.id });
       }
       
-      console.log('[FamilyTreeStore] Successfully synced family tree from backend');
+      if (__DEV__) {
+        console.log('[Store] Successfully synced family tree from backend');
+      }
     } catch (error: any) {
       console.error('[FamilyTreeStore] Error syncing family tree:', error);
       // Don't throw - allow app to continue with local state

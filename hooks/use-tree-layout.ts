@@ -82,11 +82,6 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
     if (!egoId) return null;
     const people = useFamilyTreeStore.getState().people;
     const egoPerson = people.get(egoId) || null;
-    // #region agent log
-    if (egoPerson && typeof fetch !== 'undefined') {
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-tree-layout.ts:74',message:'useTreeLayout ego person found',data:{egoId,egoName:egoPerson.name,egoParentIds:egoPerson.parentIds,egoChildIds:egoPerson.childIds,egoSpouseIds:egoPerson.spouseIds,egoSiblingIds:egoPerson.siblingIds,relationshipsHash},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-    }
-    // #endregion
     return egoPerson;
   }, [egoId, peopleSize, relationshipsHash]);
 

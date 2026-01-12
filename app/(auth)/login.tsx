@@ -31,7 +31,9 @@ export default function LoginScreen() {
   // Callback when Google sign-in succeeds
   // The auth context will automatically detect the session change via onAuthStateChanged
   const handleSignInSuccess = () => {
-    console.log('[LoginScreen] Google sign-in successful');
+    if (__DEV__) {
+      console.log('[LoginScreen] Google sign-in successful');
+    }
     // Auth context will handle routing automatically
   };
 

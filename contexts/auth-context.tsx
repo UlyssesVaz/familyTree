@@ -90,7 +90,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (previousUserId !== newUserId) {
             // Different user logged in - reset sync ref so it syncs for the new user
             syncFamilyTreeDoneRef.current = null;
-            console.log('[DEBUG] AuthContext: Different user logged in, resetting sync ref', { previousUserId, newUserId });
+            if (__DEV__) {
+              console.log('[AuthContext] Different user logged in, resetting sync ref', { previousUserId, newUserId });
+            }
           }
         }
         
@@ -147,18 +149,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const currentUserId = session.user.id;
           if (syncFamilyTreeDoneRef.current !== currentUserId) {
             syncFamilyTreeDoneRef.current = currentUserId;
-            console.log('[DEBUG] AuthContext: Syncing family tree after loading ego');
+            if (__DEV__) {
+              console.log('[AuthContext] Syncing family tree after loading ego');
+            }
             try {
               await useFamilyTreeStore.getState().syncFamilyTree(currentUserId);
               console.log('[DEBUG] AuthContext: Family tree synced successfully');
             } catch (error: any) {
-              console.error('[DEBUG] AuthContext: Error syncing family tree', error);
+              console.error('[AuthContext] Error syncing family tree', error);
               // Reset ref on error so it can retry on next check
               syncFamilyTreeDoneRef.current = null;
               // Don't fail auth flow if sync fails - relationships will be loaded on next sync
             }
           } else {
-            console.log('[DEBUG] AuthContext: syncFamilyTree already called for this session, skipping');
+            if (__DEV__) {
+              console.log('[AuthContext] syncFamilyTree already called for this session, skipping');
+            }
           }
           
           // Profile exists → Make initial routing decision (ONLY ONCE)

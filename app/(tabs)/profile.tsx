@@ -74,7 +74,9 @@ export default function ProfileScreen() {
         photoUrl: updatedPerson.photoUrl,
       });
       
-      console.log('[Profile] Profile updated successfully');
+      if (__DEV__) {
+        console.log('[Profile] Profile updated successfully');
+      }
     } catch (error: any) {
       console.error('[Profile] Error updating profile:', error);
       Alert.alert(

@@ -60,9 +60,6 @@ export default function ProfileSetupScreen() {
       // Load the created person into Zustand store
       useFamilyTreeStore.getState().loadEgo(createdPerson);
       
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:61',message:'Profile created and loaded',data:{personId:createdPerson.id,userId,personCreatedBy:createdPerson.createdBy},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
 
       // Move to next step (only after successful 201 Created response)
       router.push('/(onboarding)/location');

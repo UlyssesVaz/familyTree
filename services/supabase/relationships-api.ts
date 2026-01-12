@@ -91,10 +91,6 @@ export async function createRelationship(
   };
   
   // STEP 3: Insert into database
-  console.log('[DEBUG] createRelationship: Inserting into DB', { userId, personOneId: input.personOneId, personTwoId: input.personTwoId, relationshipType: input.relationshipType });
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'relationships-api.ts:94',message:'createRelationship before DB insert',data:{userId,personOneId:input.personOneId,personTwoId:input.personTwoId,relationshipType:input.relationshipType,row},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
   const { data, error } = await supabase
     .from('relationships')
     .insert(row)
@@ -103,10 +99,6 @@ export async function createRelationship(
 
   if (error) {
     console.error('[Relationships API] Error creating relationship:', error);
-    console.log('[DEBUG] createRelationship: DB error', { errorCode: error.code, errorMessage: error.message, hint: error.hint });
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'relationships-api.ts:101',message:'createRelationship DB error',data:{errorCode:error.code,errorMessage:error.message,errorDetails:error,hint:error.hint},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     
     // Handle duplicate key error (race condition)
     if (error.code === '23505') {
@@ -131,16 +123,10 @@ export async function createRelationship(
     throw new Error('Failed to create relationship: No data returned');
   }
 
-  console.log('[DEBUG] createRelationship: DB insert success', { 
-    relationshipId: data.id, 
-    personOneId: data.person_one_id, 
-    personTwoId: data.person_two_id, 
-    relationshipType: data.relationship_type,
-    createdBy: data.created_by 
-  });
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'relationships-api.ts:125',message:'createRelationship DB success',data:{relationshipId:data.id,personOneId:data.person_one_id,personTwoId:data.person_two_id,relationshipType:data.relationship_type,createdBy:data.created_by},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
+  if (__DEV__) {
+    console.log('[Relationships API] Relationship created:', { relationshipId: data.id, relationshipType: input.relationshipType });
+  }
+  
   return data.id;
 }
 

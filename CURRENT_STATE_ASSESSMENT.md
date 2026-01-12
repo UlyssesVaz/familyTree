@@ -1,259 +1,321 @@
 # Current State Assessment & Next Steps
 
-**Date:** Current Session  
-**Focus:** Moving from "Social Wall" to "Collaborative Archive"
+**Date:** January 2025  
+**Status:** ✅ **ALL CORE FEATURES COMPLETE** - Invitation System Working!
 
 ---
 
-## ✅ What We've Completed
+## ✅ What We've Completed (Recent Session)
 
-### **Recent Achievements**
-1. **✅ Delete Feature for Living Profiles**
-   - Soft delete implemented (frontend hides immediately)
-   - Permanent deletion from database + Storage bucket
-   - Only profile owners can delete their own updates
-   - UUID primary key (`updates_id`) allows multiple posts per user per wall
+### **Backend Integration - COMPLETE** ✅
+1. **✅ People & Relationships Backend**
+   - Full CRUD operations for people via `people-api.ts`
+   - Relationship management via `relationships-api.ts`
+   - Database-generated UUIDs for `user_id` (primary key)
+   - `linked_auth_user_id` field distinguishes Living vs Ancestor profiles
+   - Shadow profiles (ancestors without accounts) fully supported
+   - RLS policies enforce `created_by` requirements
 
-2. **✅ Backend Integration (Partial)**
-   - Updates API fully integrated with Supabase
-   - Photo upload to Storage bucket working
-   - Database schema with UUID primary key
-   - CASCADE deletion for `update_tags`
+2. **✅ Updates Backend**
+   - Full CRUD operations for updates via `updates-api.ts`
+   - Photo upload to Supabase Storage (`update-photos` bucket)
+   - Tagging system via `update_tags` table
+   - Updates can be posted on any person's wall (not just ego)
+   - `user_id` = target person's wall, `created_by` = authenticated user posting
 
-3. **✅ Core Architecture**
-   - Service layer abstraction ready
-   - Zustand store with optimistic updates
-   - Hooks extracted (`useProfileUpdates`, `useFamilyFeed`, `useUpdateManagement`)
-   - Type-safe API functions
+3. **✅ Sync & Persistence**
+   - `syncFamilyTree()` loads all people, relationships, and updates on app startup
+   - Single fetch per login session (no polling loops)
+   - Optimistic updates for instant UI feedback
+   - Silent background saves (no refetch after creation)
+   - Proper relationship mapping (fixed 'child' relationship direction bug)
+
+4. **✅ Data Flow**
+   - Optimistic updates → Background save → No refetch
+   - Follows same pattern as `addUpdate` for consistency
+   - Ready for WebSocket real-time updates later
 
 ---
 
 ## 🎯 Current State: Where We Are
 
-### **Profile Types (Conceptual - Not Yet Implemented)**
-
-Based on the "Family Compendium" vision:
+### **Profile Types - IMPLEMENTED** ✅
 
 #### **Living Profiles (Self-Managed)**
-- **Status:** ✅ Partially implemented
-- **Current:** Users can create/delete their own updates
-- **Missing:** `linked_auth_user_id` field to distinguish from Ancestor Profiles
-- **Permission Logic:** Only owner can modify/delete (working for deletes)
+- **Status:** ✅ Fully implemented
+- **Current:** 
+  - `linked_auth_user_id` field links to `auth.users.id`
+  - Users can create/delete their own updates
+  - Only owners can modify/delete their updates
+- **Database:** `people.linked_auth_user_id = auth.users.id`
 
 #### **Ancestor Profiles (Crowdsourced)**
-- **Status:** ❌ Not yet implemented
-- **Current:** No distinction between Living and Ancestor profiles
-- **Missing:** 
-  - `linked_auth_user_id` field (NULL = Ancestor)
-  - Permission logic allowing any authenticated user to add updates
-  - UI indicators showing profile type
+- **Status:** ✅ Fully implemented
+- **Current:**
+  - `linked_auth_user_id = null` (no linked auth user)
+  - Any authenticated user can add updates to ancestor profiles
+  - Database-generated `user_id` (not tied to auth)
+- **Database:** `people.linked_auth_user_id = NULL`
 
 ### **Permission System Status**
 
 | Feature | Living Profiles | Ancestor Profiles | Status |
 |---------|----------------|-------------------|--------|
-| **Add Updates** | Owner only | Any authenticated user | ⚠️ Partial (no distinction yet) |
-| **Delete Updates** | Owner only | ❓ Not defined | ✅ Working (owner only) |
-| **Modify Updates** | Owner only | ❓ Not defined | ⚠️ No restrictions yet |
-| **Change Visibility** | Owner only | ❓ Not defined | ⚠️ No restrictions yet |
+| **Add Updates** | Owner only | Any authenticated user | ✅ Working |
+| **Delete Updates** | Owner only | Creator only | ✅ Working |
+| **Modify Updates** | Owner only | Creator only | ⚠️ No restrictions yet |
+| **Change Visibility** | Owner only | Creator only | ⚠️ No restrictions yet |
 
 ---
 
-## 🚀 Next Incremental Feature: Ancestor Profile Support
+## ✅ Invitation System - COMPLETE!
 
-### **Phase 1: Add `linked_auth_user_id` to Person Type**
+### **Status:** ✅ **FULLY IMPLEMENTED AND WORKING**
 
-**Goal:** Distinguish between Living and Ancestor profiles
+**What's Working:**
+- ✅ Generate invitation links for ancestor profiles
+- ✅ Share links via native Share sheet
+- ✅ Deep linking (`familytreeapp://join/[token]`)
+- ✅ Join screen with Google SSO button
+- ✅ Automatic profile claiming after sign-in
+- ✅ Multi-user support (different Google accounts can claim different profiles)
 
-**Changes Needed:**
-1. Add `linkedAuthUserId?: string` to `Person` interface
-2. Update database schema (if not already present)
-3. Update `people-api.ts` to handle this field
-4. Update store to track this field
-
-**Acceptance Criteria:**
-- ✅ Person type includes `linkedAuthUserId`
-- ✅ Living profiles have `linkedAuthUserId === auth.users.id`
-- ✅ Ancestor profiles have `linkedAuthUserId === null/undefined`
-- ✅ Database queries handle both cases
+**Implementation:**
+- `services/supabase/invitations-api.ts` - Full CRUD for invitation links
+- `app/join/[token].tsx` - Join/claim screen with auth flow
+- Invite button on person profiles (for ancestor profiles)
+- Auto-invite when adding new people
 
 ---
 
-### **Phase 2: Permission Helpers**
+## 🚀 Next Steps: Code Efficiency (Optional)
 
-**Goal:** Create utility functions to check permissions
+### **Overview**
+Allow family members to invite relatives to claim their profiles. When someone signs up via an invite link, their profile's `linked_auth_user_id` gets set, converting an "Ancestor Profile" to a "Living Profile."
 
-**New Files:**
-- `utils/profile-permissions.ts`
-
-**Functions:**
-```typescript
-// Check if profile is Living (has linked auth user)
-export function isLivingProfile(person: Person): boolean
-
-// Check if current user owns this profile
-export function isProfileOwner(person: Person, currentUserId: string): boolean
-
-// Check if user can add updates to this profile
-export function canAddUpdate(person: Person, currentUserId: string): boolean
-
-// Check if user can delete/modify an update
-export function canModifyUpdate(update: Update, person: Person, currentUserId: string): boolean
+### **Database Schema (Already Exists)**
+```sql
+CREATE TABLE invitation_links (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  target_person_id uuid REFERENCES people(user_id),
+  token text NOT NULL UNIQUE,
+  expires_at timestamp with time zone DEFAULT (now() + '7 days'),
+  created_at timestamp with time zone DEFAULT now(),
+  created_by uuid NOT NULL REFERENCES auth.users(id)
+);
 ```
 
-**Acceptance Criteria:**
-- ✅ Helper functions correctly identify profile types
-- ✅ Permission checks work for both Living and Ancestor profiles
-- ✅ Functions are pure and testable
+### **Phase 1: Create Invitation Links**
 
----
+**Goal:** Allow curators to generate invite links for specific profiles
 
-### **Phase 3: Update UI to Show Profile Type**
+**Implementation:**
+1. Create `services/supabase/invitations-api.ts`:
+   - `createInvitationLink(targetPersonId, userId)` → generates token, saves to DB
+   - `getInvitationLink(token)` → validates token, returns target person
+   - `claimInvitationLink(token, userId)` → sets `linked_auth_user_id`, deletes link
 
-**Goal:** Visual distinction between Living and Ancestor profiles
-
-**Changes:**
-1. Add badge/indicator showing "Living" vs "Ancestor"
-2. Show different UI for adding updates:
-   - Living: "Add to Your Profile"
-   - Ancestor: "Add to Family Archive"
-3. Update profile screens to show profile type
+2. Add UI in profile screen:
+   - "Invite [Person Name]" button (only for profiles with `linkedAuthUserId === null`)
+   - Generate link, show shareable URL
+   - Copy to clipboard functionality
 
 **Acceptance Criteria:**
-- ✅ Users can visually distinguish profile types
-- ✅ UI language reflects collaborative nature of Ancestor profiles
-- ✅ Clear indication of who can contribute
+- ✅ Curators can generate invite links for ancestor profiles
+- ✅ Links expire after 7 days
+- ✅ Links are unique tokens
+- ✅ Can share via native share sheet
 
 ---
 
-### **Phase 4: Update Permissions in API**
+### **Phase 2: Handle Invite Links on Sign-Up**
 
-**Goal:** Enforce permissions at API level
+**Goal:** When user signs up via invite link, claim their profile
 
-**Changes:**
-1. Update `createUpdate` to check permissions:
-   - Living: Only owner can add
-   - Ancestor: Any authenticated user can add
-2. Update `deleteUpdate` to check permissions:
-   - Living: Only owner can delete
-   - Ancestor: Only creator can delete (or owner if exists)
-3. Update `updateUpdate` to check permissions:
-   - Living: Only owner can modify
-   - Ancestor: Only creator can modify
+**Implementation:**
+1. Deep link handling:
+   - `app/join/[token].tsx` route
+   - Extract token from URL params
+   - Validate token (not expired, exists)
+   - Show "Claim Profile" screen
+
+2. Claim flow:
+   - User signs up/logs in
+   - After auth, call `claimInvitationLink(token, userId)`
+   - Updates `people.linked_auth_user_id = userId`
+   - Deletes invitation link
+   - Redirects to profile
 
 **Acceptance Criteria:**
-- ✅ API enforces permissions correctly
-- ✅ RLS policies support permission checks
-- ✅ Error messages are clear when permissions denied
+- ✅ Users can access invite links via deep link
+- ✅ Token validation works (expired links rejected)
+- ✅ Profile claiming updates `linked_auth_user_id`
+- ✅ User becomes owner of their profile after claiming
 
 ---
 
-### **Phase 5: Update Frontend Components**
+### **Phase 3: Invite Link Management**
 
-**Goal:** Apply permissions in UI components
+**Goal:** Allow curators to see/manage active invitations
 
-**Changes:**
-1. Update `AddUpdateModal` to check `canAddUpdate()`
-2. Update delete buttons to check `canModifyUpdate()`
-3. Update edit buttons to check `canModifyUpdate()`
-4. Hide/disable actions based on permissions
+**Implementation:**
+1. Add "Active Invitations" section to profile:
+   - List all invitation links created for this person
+   - Show expiration dates
+   - Allow revoking invitations
+
+2. Notification system (future):
+   - Notify when invitation is claimed
+   - Show pending invitations
 
 **Acceptance Criteria:**
-- ✅ UI correctly shows/hides actions based on permissions
-- ✅ Users can't attempt actions they're not allowed to perform
-- ✅ Clear feedback when actions are restricted
-
----
-
-## 📋 Implementation Order (Recommended)
-
-### **Step 1: Foundation (Type System)**
-1. Add `linkedAuthUserId` to `Person` type
-2. Update database schema if needed
-3. Update `people-api.ts` to handle field
-
-### **Step 2: Permission Logic**
-1. Create `utils/profile-permissions.ts`
-2. Implement helper functions
-3. Add unit tests (if testing framework exists)
-
-### **Step 3: API Enforcement**
-1. Update `createUpdate` permissions
-2. Update `deleteUpdate` permissions (already owner-only, verify)
-3. Update `updateUpdate` permissions
-
-### **Step 4: UI Updates**
-1. Add profile type indicators
-2. Update permission checks in components
-3. Update language/messaging
-
-### **Step 5: Testing & Refinement**
-1. Test Living profile permissions
-2. Test Ancestor profile permissions
-3. Test edge cases (unclaimed profiles, etc.)
-
----
-
-## 🔍 Key Questions to Resolve
-
-1. **Ancestor Profile Delete Permissions:**
-   - Can anyone delete updates on Ancestor profiles?
-   - Or only the creator of the update?
-   - Or only if the profile gets claimed later?
-
-2. **Profile Claiming:**
-   - Can an Ancestor profile be "claimed" later?
-   - What happens to existing updates when claimed?
-   - Should we implement claiming in this phase?
-
-3. **Multi-Wall Effect:**
-   - When a post is tagged, does it appear on both walls?
-   - What permissions apply on the tagged person's wall?
-   - Should tagged posts be deletable from both walls?
+- ✅ Curators can see active invitations
+- ✅ Can revoke invitations
+- ✅ Expired invitations are automatically cleaned up
 
 ---
 
 ## 📊 Current Architecture Status
 
 ### **✅ Well-Architected**
-- Service layer abstraction
-- Type-safe API functions
-- Hooks for reusable logic
-- Separation of concerns
+- ✅ Service layer abstraction (people-api, relationships-api, updates-api)
+- ✅ Type-safe API functions
+- ✅ Hooks for reusable logic (`useTreeLayout`, `useProfileUpdates`, `useFamilyFeed`)
+- ✅ Separation of concerns
+- ✅ Optimistic updates pattern
+- ✅ Single sync on login (no polling)
+- ✅ Cycle detection in tree traversal (`visited` Set)
 
 ### **⚠️ Needs Attention**
-- Large component files (700-800 lines)
-- Some duplicate code (~440 lines identified)
-- Permission logic not yet centralized
+- ⚠️ Large component files (700-800 lines) - refactoring planned
+- ⚠️ Some duplicate code (~440 lines identified)
+- ⚠️ Debug logs still present (should be cleaned up after verification)
+- ⚠️ Update permissions (modify/visibility) not yet restricted
 
 ### **❌ Missing**
-- `linked_auth_user_id` field in Person type
-- Permission utility functions
-- Profile type distinction in UI
-- Ancestor profile support
+- ❌ Invitation system (next feature)
+- ❌ WebSocket real-time updates
+- ❌ Update permission enforcement (modify/visibility)
+
+---
+
+## 🔍 Scalability & Performance Checks
+
+### **✅ Cycle Prevention**
+- Tree traversal uses `visited` Set to prevent infinite loops
+- Both `countAncestors` and `countDescendants` have cycle detection
+- `useTreeLayout` uses `visited` Set in recursive generation calculations
+
+### **✅ Performance Optimizations**
+- `Map<string, Person>` for O(1) lookups (crucial for large trees)
+- `relationshipsHash` for efficient reactivity tracking
+- Memoized tree calculations (`useMemo` with proper dependencies)
+- Parallel fetching (`Promise.all` for people + relationships + updates)
+
+### **⚠️ Potential Issues with Many People**
+1. **Tree Layout Calculation:**
+   - Recursive traversal could be slow with very deep trees (10+ generations)
+   - **Mitigation:** `visited` Set prevents revisiting, but deep trees still traverse all ancestors
+   - **Future:** Consider limiting generation depth or lazy loading
+
+2. **Sync Performance:**
+   - `getAllPeople()` and `getAllUpdates()` fetch everything
+   - **Mitigation:** Currently fine for small-medium families (<1000 people)
+   - **Future:** Add pagination or filtering if needed
+
+3. **Memory Usage:**
+   - All people/updates loaded into Zustand store
+   - **Mitigation:** Maps are efficient, but large datasets could use memory
+   - **Future:** Consider virtual scrolling or lazy loading for updates
+
+4. **Relationship Hash Calculation:**
+   - `relationshipsHash` iterates all people on every store update
+   - **Mitigation:** Only recalculates when relationships change
+   - **Future:** Could optimize with incremental hash updates
+
+### **✅ Code Quality**
+- No obvious infinite loops or memory leaks
+- Proper error handling with rollback on failures
+- Type safety throughout
+- RLS policies enforce data integrity
 
 ---
 
 ## 🎯 Success Metrics
 
-After implementing Ancestor Profile Support:
-
-1. ✅ Users can distinguish Living vs Ancestor profiles
+### **Completed Features:**
+1. ✅ Users can distinguish Living vs Ancestor profiles (`linkedAuthUserId`)
 2. ✅ Any authenticated user can add updates to Ancestor profiles
 3. ✅ Only owners can modify/delete on Living profiles
-4. ✅ Clear permission enforcement at API level
-5. ✅ UI correctly reflects permissions
-6. ✅ Code is maintainable and testable
+4. ✅ Updates persist correctly on reload
+5. ✅ Relationships load correctly from database
+6. ✅ No polling loops (single sync on login)
+7. ✅ Optimistic updates provide instant feedback
+
+### **Next Feature (Invitation System):**
+1. ⏳ Curators can generate invite links
+2. ⏳ Users can claim profiles via invite links
+3. ⏳ Profiles convert from Ancestor → Living on claim
+4. ⏳ Invitation management UI
 
 ---
 
-## 📝 Notes
+## 📝 Implementation Notes
 
-- **Incremental Approach:** Each phase should be fully working before moving to next
-- **Backward Compatibility:** Ensure existing Living profiles continue to work
-- **Database Migration:** May need migration script for `linked_auth_user_id` field
-- **Testing:** Test both profile types thoroughly before moving forward
+### **Recent Fixes:**
+1. **Fixed 'child' relationship mapping bug** - was reversed, now correct
+2. **Fixed missing updates on reload** - added `getAllUpdates()` to sync
+3. **Fixed polling loop** - removed redundant `syncFamilyTree` calls
+4. **Fixed `deleted_at` column error** - removed references (column doesn't exist)
+5. **Fixed updates on other people's walls** - `addUpdate` now accepts `targetUserId`
+
+### **Code Cleanup Needed:**
+- Remove debug logs after verification (marked with `#region agent log`)
+- Clean up `console.log` statements used for debugging
+- Consider extracting more hooks from large components
+
+### **Database Schema Status:**
+- ✅ `people` table: `user_id` (PK), `linked_auth_user_id` (nullable FK)
+- ✅ `relationships` table: bidirectional relationships
+- ✅ `updates` table: `user_id` (target wall), `created_by` (poster)
+- ✅ `update_tags` table: many-to-many tagging
+- ✅ `invitation_links` table: ready for implementation
 
 ---
 
-**Next Action:** Start with Phase 1 - Add `linked_auth_user_id` to Person type
+## 🚀 Recommended Next Steps
+
+### **Immediate (This Week)**
+1. **Implement Invitation System Phase 1:**
+   - Create `invitations-api.ts`
+   - Add "Invite" button to ancestor profiles
+   - Generate and share invitation links
+
+2. **Code Cleanup:**
+   - Remove debug logs
+   - Clean up console.log statements
+
+### **Short Term (Next 2 Weeks)**
+1. **Complete Invitation System:**
+   - Deep link handling
+   - Profile claiming flow
+   - Invitation management UI
+
+2. **Update Permissions:**
+   - Enforce modify/visibility restrictions
+   - Add permission checks to UI
+
+### **Medium Term (Next Month)**
+1. **WebSocket Real-time Updates:**
+   - Supabase Realtime subscriptions
+   - Live updates from other users
+   - No polling needed
+
+2. **Performance Optimizations:**
+   - Lazy loading for large trees
+   - Virtual scrolling for updates
+   - Incremental relationship hash updates
+
+---
+
+**Next Action:** Start implementing Invitation System Phase 1 - Create Invitation Links

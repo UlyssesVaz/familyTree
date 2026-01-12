@@ -77,10 +77,6 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
     return null;
   }
   
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:73',message:'Database response structure',data:{hasId:!!data.id,hasUserId:!!data.user_id,idValue:data.id,userIdValue:data.user_id,allKeys:Object.keys(data)},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
-  
   // Explicitly map every database field to Person type
   // Handle optional columns gracefully
   // CRITICAL: Database uses user_id as primary key (NOT id)
@@ -110,10 +106,6 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
     hiddenTaggedUpdateIds: undefined, // Will be loaded later if needed
     linkedAuthUserId: data.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
   };
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:100',message:'Mapped Person object',data:{personId:person.id,personCreatedBy:person.createdBy,requestedUserId:userId},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
   
   return person;
 }
@@ -215,10 +207,6 @@ export async function createEgoProfile(
   if (!data) {
     throw new Error('Failed to create profile: No data returned');
   }
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:195',message:'Create profile database response',data:{hasId:!!data.id,hasUserId:!!data.user_id,idValue:data.id,userIdValue:data.user_id,allKeys:Object.keys(data)},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
   
   // STEP 4: Map database response to Person type
   // Explicitly map every database field to Person type
@@ -515,10 +503,6 @@ export async function createRelative(
 export async function getAllPeople(): Promise<Person[]> {
   const supabase = getSupabaseClient();
   
-  console.log('[DEBUG] getAllPeople: Fetching from database');
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:515',message:'getAllPeople entry',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
   // STEP 1: Fetch all people and relationships in parallel for efficiency
   // This is significantly faster than sequential fetching
   const [peopleResponse, relationshipsResponse] = await Promise.all([
@@ -529,32 +513,24 @@ export async function getAllPeople(): Promise<Person[]> {
   const { data: peopleData, error: peopleError } = peopleResponse;
   const { data: relationshipsData, error: relationshipsError } = relationshipsResponse;
   
-  console.log('[DEBUG] getAllPeople: Fetched data', { 
-    peopleCount: peopleData?.length || 0,
-    relationshipsCount: relationshipsData?.length || 0,
-    relationshipsError: relationshipsError?.message 
-  });
+  if (__DEV__) {
+    console.log('[People API] getAllPeople: Fetched data', { 
+      peopleCount: peopleData?.length || 0,
+      relationshipsCount: relationshipsData?.length || 0,
+    });
+  }
 
   if (peopleError) {
     console.error('[People API] Error fetching people:', peopleError);
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:529',message:'getAllPeople people fetch error',data:{errorCode:peopleError.code,errorMessage:peopleError.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     throw new Error(`Failed to fetch people: ${peopleError.message}`);
   }
 
   if (!peopleData || peopleData.length === 0) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:534',message:'getAllPeople no people found',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     return []; // No people in database yet
   }
 
   if (relationshipsError) {
     console.error('[People API] Error fetching relationships:', relationshipsError);
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:538',message:'getAllPeople relationships fetch error',data:{errorCode:relationshipsError.code,errorMessage:relationshipsError.message,errorDetails:relationshipsError,hint:relationshipsError.hint},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     // Don't fail - continue without relationships (can be loaded separately)
   }
   
@@ -653,9 +629,5 @@ export async function getAllPeople(): Promise<Person[]> {
         linkedAuthUserId: row.linked_auth_user_id || undefined,
       };
     });
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:637',message:'getAllPeople returning',data:{peopleCount:people.length,relationshipsCount:relationshipsData?.length||0,peopleIds:people.map(p=>p.id),relationshipIds:relationshipsData?.map(r=>`${r.person_one_id}->${r.person_two_id}:${r.relationship_type}`)||[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
   return people;
 }

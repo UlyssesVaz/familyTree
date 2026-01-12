@@ -2,12 +2,16 @@
 
 ## Executive Summary
 
-**Recommended Approach**: **Hybrid State Management** + **Supabase as Full-Stack Solution**
+**Current Status**: **✅ Backend Integration Complete - Using Zustand + Supabase Directly**
 
-- ✅ **Keep Zustand** for client/UI state (filters, modals, form state)
-- ✅ **Add TanStack Query** for server state (API data, caching, sync)
-- ✅ **Use Supabase** for database + REST APIs + real-time subscriptions
-- ✅ **Progressive migration** - migrate incrementally, no big bang
+- ✅ **Zustand** for all state (UI + server data) - working well with optimistic updates
+- ✅ **Supabase** for database + REST APIs + Storage
+- ✅ **Direct Supabase Client** - no custom API server needed
+- ✅ **Optimistic Updates Pattern** - instant UI, silent background saves
+- ⏳ **WebSocket Real-time** - planned for future (Supabase Realtime subscriptions)
+- ⏳ **TanStack Query** - optional future optimization (not needed yet)
+
+**Decision**: Zustand + Supabase direct client is working well. TanStack Query can be added later if needed for advanced caching/background sync, but current approach is production-ready.
 
 ---
 
@@ -502,23 +506,47 @@ function FamilyTreeScreen() {
 
 ## 7. Recommended Next Steps
 
+### **✅ Completed (January 2025)**
+1. ✅ **Database schema** - Created in Supabase with RLS policies
+2. ✅ **Storage buckets** - Set up for photos (`update-photos`)
+3. ✅ **People CRUD** - Full implementation via `people-api.ts`
+4. ✅ **Relationships CRUD** - Full implementation via `relationships-api.ts`
+5. ✅ **Updates CRUD** - Full implementation via `updates-api.ts`
+6. ✅ **Photo upload** - Working with Supabase Storage
+7. ✅ **Optimistic updates** - Implemented with rollback on error
+8. ✅ **Sync strategy** - Single fetch on login, no polling
+
 ### **Immediate (This Week)**
-1. ✅ **Install TanStack Query**: `npm install @tanstack/react-query`
-2. ✅ **Design database schema** in Supabase Dashboard
-3. ✅ **Create tables** with RLS policies
-4. ✅ **Set up storage buckets** for photos
+1. **Implement Invitation System:**
+   - Create `invitations-api.ts` for invite link management
+   - Add "Invite" UI to ancestor profiles
+   - Deep link handling for invite tokens
+   - Profile claiming flow
+
+2. **Code Cleanup:**
+   - Remove debug logs (marked with `#region agent log`)
+   - Clean up console.log statements
 
 ### **Short Term (Next 2 Weeks)**
-1. ✅ Migrate `people` CRUD to TanStack Query + Supabase
-2. ✅ Test with real data
-3. ✅ Add photo upload to Supabase Storage
-4. ✅ Keep Zustand for UI state (no changes needed)
+1. **Complete Invitation System:**
+   - Invitation management UI
+   - Notification when invitation is claimed
+   - Expired invitation cleanup
+
+2. **Update Permissions:**
+   - Enforce modify/visibility restrictions
+   - Add permission checks to UI components
 
 ### **Medium Term (Next Month)**
-1. ✅ Migrate relationships and updates
-2. ✅ Add real-time subscriptions
-3. ✅ Implement optimistic updates with rollback
-4. ✅ Add offline support with AsyncStorage
+1. **WebSocket Real-time Updates:**
+   - Supabase Realtime subscriptions for people/relationships/updates
+   - Live updates from other users
+   - No polling needed
+
+2. **Optional: TanStack Query:**
+   - Only if advanced caching/background sync needed
+   - Current Zustand approach is working well
+   - Can migrate incrementally if performance issues arise
 
 ### **Future Considerations**
 - Consider custom API server only if you need:
