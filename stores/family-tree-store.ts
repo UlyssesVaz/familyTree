@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Person, Update } from '@/types/family-tree';
-import { createUpdate } from '@/services/supabase/updates-api';
+import { createUpdate, deleteUpdate as deleteUpdateAPI } from '@/services/supabase/updates-api';
+import { createRelative, getAllPeople } from '@/services/supabase/people-api';
+import { createRelationship } from '@/services/supabase/relationships-api';
 
 /**
  * Minimal Family Tree Store
@@ -9,6 +11,9 @@ import { createUpdate } from '@/services/supabase/updates-api';
  * Just enough to hold one person (ego) for display.
  * Will expand later as features are added incrementally.
  */
+
+// Track if syncFamilyTree is currently running to prevent concurrent calls
+let isSyncing = false;
 interface FamilyTreeStore {
   /** Map of person ID to Person object */
   people: Map<string, Person>;
@@ -58,35 +63,41 @@ interface FamilyTreeStore {
   /** Toggle update privacy (public/private) */
   toggleUpdatePrivacy: (updateId: string) => void;
   
-  /** Delete an update */
-  deleteUpdate: (updateId: string) => void;
+  /** Delete an update (soft delete in frontend, then permanent delete from database/Storage) */
+  deleteUpdate: (updateId: string) => Promise<void>;
 
   /** Toggle visibility of a tagged update on a person's profile */
   toggleTaggedUpdateVisibility: (personId: string, updateId: string) => void;
 
-  /** Create a new person and add to store */
+  /** Create a new person and add to store (syncs with backend) */
   addPerson: (data: {
     name: string;
     photoUrl?: string;
     birthDate?: string;
     gender?: Person['gender'];
     phoneNumber?: string;
-  }) => string;
+  }, userId?: string) => Promise<string>;
+  
+  /** Sync family tree from backend (loads all people and relationships) */
+  syncFamilyTree: (userId: string) => Promise<void>;
 
-  /** Add a parent relationship (bidirectional) */
-  addParent: (childId: string, parentId: string) => void;
+  /** Add a parent relationship (bidirectional, syncs with backend) */
+  addParent: (childId: string, parentId: string, userId?: string) => Promise<void>;
 
-  /** Add a spouse relationship (bidirectional) */
-  addSpouse: (personId1: string, personId2: string) => void;
+  /** Add a spouse relationship (bidirectional, syncs with backend) */
+  addSpouse: (personId1: string, personId2: string, userId?: string) => Promise<void>;
 
-  /** Add a child relationship (bidirectional) */
-  addChild: (parentId: string, childId: string) => void;
+  /** Add a child relationship (bidirectional, syncs with backend) */
+  addChild: (parentId: string, childId: string, userId?: string) => Promise<void>;
 
-  /** Add a sibling relationship (people who share at least one parent) */
-  addSibling: (personId1: string, personId2: string) => void;
+  /** Add a sibling relationship (people who share at least one parent, syncs with backend) */
+  addSibling: (personId1: string, personId2: string, userId?: string) => Promise<void>;
 
   /** Get siblings of a person (people who share at least one parent) */
   getSiblings: (personId: string) => Person[];
+  
+  /** Sync family tree from backend (loads all people and relationships) */
+  syncFamilyTree: (userId: string) => Promise<void>;
 }
 
 export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
@@ -297,7 +308,8 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
   getUpdatesForPerson: (personId, includeTagged = true) => {
     const { updates, people } = get();
     const person = people.get(personId);
-    const allUpdates = Array.from(updates.values());
+    const allUpdates = Array.from(updates.values())
+      .filter(update => !update.deletedAt); // Exclude soft-deleted updates
     
     // Get updates created by this person
     // BUT exclude updates where person created it but only tagged others (not themselves)
@@ -361,19 +373,44 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     set({ updates: newUpdates });
   },
 
-  deleteUpdate: (updateId) => {
+  deleteUpdate: async (updateId) => {
     const { updates } = get();
-    if (!updates.has(updateId)) {
+    const update = updates.get(updateId);
+    if (!update) {
       console.warn(`Update ${updateId} not found for deletion`);
       return;
     }
     
-    // Create new Map without the deleted update
+    // STEP 1: Soft delete in frontend (hide immediately for instant UI feedback)
+    // Set deletedAt timestamp instead of removing from Map
+    const deletedUpdate: Update = {
+      ...update,
+      deletedAt: Date.now(),
+    };
+    
     const newUpdates = new Map(updates);
-    newUpdates.delete(updateId);
+    newUpdates.set(updateId, deletedUpdate);
     
     // Force Zustand to recognize the change by creating a completely new Map
     set({ updates: new Map(newUpdates) });
+    
+    // STEP 2: Permanently delete from database and Storage (async, non-blocking)
+    // This happens after the UI update so the user sees immediate feedback
+    // If this fails, the update is still hidden (soft delete) but remains in database
+    try {
+      await deleteUpdateAPI(updateId);
+      console.log('[FamilyTreeStore] Successfully deleted update from database and Storage');
+      
+      // After successful deletion, remove from local store completely
+      // (optional - could keep it with deletedAt for recovery, but removing for cleanliness)
+      const finalUpdates = new Map(newUpdates);
+      finalUpdates.delete(updateId);
+      set({ updates: new Map(finalUpdates) });
+    } catch (error: any) {
+      console.error('[FamilyTreeStore] Error deleting update from database/Storage:', error);
+      // Update remains soft-deleted (hidden) in the UI
+      // User can try again later or it will be cleaned up on next sync
+    }
   },
 
   toggleTaggedUpdateVisibility: (personId, updateId) => {
@@ -402,12 +439,13 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     set({ people: new Map(newPeople) });
   },
 
-  addPerson: (data) => {
-    const id = uuidv4();
+  addPerson: async (data, userId) => {
+    // STEP 1: Optimistic update - add to store immediately for instant UI feedback
+    const tempId = uuidv4();
     const now = Date.now();
 
-    const person: Person = {
-      id,
+    const optimisticPerson: Person = {
+      id: tempId,
       name: data.name,
       photoUrl: data.photoUrl,
       birthDate: data.birthDate,
@@ -420,22 +458,70 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       createdAt: now,
       updatedAt: now,
       version: 1,
+      linkedAuthUserId: undefined, // Ancestor profile (no linked auth user)
     };
 
-    const newPeople = new Map(get().people);
-    newPeople.set(id, person);
-
+    const oldPeople = get().people;
+    const newPeople = new Map(oldPeople);
+    newPeople.set(tempId, optimisticPerson);
     set({ people: newPeople });
-    return id;
+
+    // STEP 2: If no userId provided, skip database save (fallback to local-only)
+    if (!userId) {
+      console.warn('[FamilyTreeStore] addPerson called without userId - saving to local state only');
+      return tempId;
+    }
+
+    try {
+      // STEP 3: Save to database via API (handles photo upload)
+      const createdPerson = await createRelative(userId, {
+        name: data.name,
+        birthDate: data.birthDate,
+        gender: data.gender,
+        photoUrl: data.photoUrl,
+        bio: undefined,
+        phoneNumber: data.phoneNumber,
+      });
+
+      // STEP 4: Replace optimistic person with real one from database
+      // CRITICAL: This ensures relationships use the DB-generated user_id, not temp ID
+      const finalPeople = new Map(oldPeople);
+      finalPeople.delete(tempId); // Remove temporary person
+      finalPeople.set(createdPerson.id, createdPerson); // Add real person with DB-generated user_id
+      set({ people: finalPeople });
+
+      // STEP 5: Return the real DB-generated user_id for relationship creation
+      // This ensures createRelationship uses the correct ID (not temp ID)
+      return createdPerson.id;
+    } catch (error: any) {
+      console.error('[FamilyTreeStore] Error saving person to database:', error);
+      
+      // Keep optimistic person on error (user sees it, but it's not persisted)
+      // In future, could show error toast and remove optimistic person
+      return tempId;
+    }
   },
 
-  addParent: (childId, parentId) => {
+  addParent: async (childId, parentId, userId) => {
+    // NOTE: childId and parentId should be DB-generated user_ids (not temp IDs)
+    // This is ensured because addPerson replaces temp ID with real ID before returning
+    console.log('[DEBUG] addParent: Entry', { childId, parentId, userId, availablePersonIds: Array.from(get().people.keys()) });
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:502',message:'addParent entry',data:{childId,parentId,userId,availablePersonIds:Array.from(get().people.keys())},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
     const { people } = get();
     const child = people.get(childId);
     const parent = people.get(parentId);
 
     if (!child || !parent) {
-      console.warn(`Cannot add parent: child or parent not found`);
+      console.warn(`Cannot add parent: child or parent not found. childId: ${childId}, parentId: ${parentId}`);
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:509',message:'addParent person not found',data:{childId,parentId,availablePersonIds:Array.from(people.keys()),childFound:!!child,parentFound:!!parent},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
+      // Log available person IDs for debugging
+      if (__DEV__) {
+        console.log('[Store] Available person IDs:', Array.from(people.keys()));
+      }
       return;
     }
 
@@ -450,7 +536,10 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       return;
     }
 
-    // Update child: add parent to parentIds
+    // STEP 1: Optimistic update - update store immediately for instant UI feedback
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:529',message:'addParent before optimistic update',data:{childId,parentId,childParentIds:child.parentIds,parentChildIds:parent.childIds},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     const updatedChild: Person = {
       ...child,
       parentIds: [...child.parentIds, parentId],
@@ -458,7 +547,6 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       version: child.version + 1,
     };
 
-    // Update parent: add child to childIds
     const updatedParent: Person = {
       ...parent,
       childIds: [...parent.childIds, childId],
@@ -466,21 +554,70 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       version: parent.version + 1,
     };
 
-    const newPeople = new Map(people);
+    const oldPeople = get().people;
+    const newPeople = new Map(oldPeople);
     newPeople.set(childId, updatedChild);
     newPeople.set(parentId, updatedParent);
-
-    // Force a new Map reference to ensure Zustand detects the change
     set({ people: new Map(newPeople) });
+    console.log('[DEBUG] addParent: Optimistic update applied', { 
+      childId, 
+      parentId, 
+      childParentIds: updatedChild.parentIds, 
+      parentChildIds: updatedParent.childIds,
+      storePeopleSize: newPeople.size 
+    });
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:548',message:'addParent after optimistic update',data:{childId,parentId,updatedChildParentIds:updatedChild.parentIds,updatedParentChildIds:updatedParent.childIds,storePeopleSize:newPeople.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     
     if (__DEV__) {
       const childName = updatedChild.name;
       const parentName = updatedParent.name;
       console.log(`[Store] Added parent relationship: ${parentName} -> ${childName}`);
     }
+
+    // STEP 2: If no userId provided, skip database save (fallback to local-only)
+    if (!userId) {
+      console.warn('[FamilyTreeStore] addParent called without userId - saving to local state only');
+      return;
+    }
+
+    try {
+      // STEP 3: Save relationship to database via API
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:563',message:'addParent calling createRelationship',data:{userId,personOneId:parentId,personTwoId:childId,relationshipType:'parent'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      // Silent background save: Save to database without refetching
+      // Follows the same pattern as addUpdate: optimistic update → save to DB → no refetch
+      // This prevents UI flicker and saves bandwidth
+      // WebSockets will handle real-time updates from other users later
+      const relationshipId = await createRelationship(userId, {
+        personOneId: parentId,
+        personTwoId: childId,
+        relationshipType: 'parent',
+      });
+      console.log('[DEBUG] addParent: Relationship saved to DB', { relationshipId, parentId, childId });
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:569',message:'addParent createRelationship success',data:{relationshipId,personOneId:parentId,personTwoId:childId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      
+      // NOTE: No refetch after save - optimistic update is sufficient
+      // Backend sync happens once on app startup (in auth-context.tsx)
+      // Future: WebSockets will handle real-time updates from other users
+    } catch (error: any) {
+      console.error('[FamilyTreeStore] Error saving parent relationship to database:', error);
+      
+      // Rollback optimistic update on error
+      const rollbackPeople = new Map(oldPeople);
+      rollbackPeople.set(childId, child);
+      rollbackPeople.set(parentId, parent);
+      set({ people: rollbackPeople });
+      
+      // In future, could show error toast
+    }
   },
 
-  addSpouse: (personId1, personId2) => {
+  addSpouse: async (personId1, personId2, userId) => {
     const { people } = get();
     const person1 = people.get(personId1);
     const person2 = people.get(personId2);
@@ -501,7 +638,7 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       return;
     }
 
-    // Update person1: add person2 to spouseIds
+    // STEP 1: Optimistic update
     const updatedPerson1: Person = {
       ...person1,
       spouseIds: [...person1.spouseIds, personId2],
@@ -509,7 +646,6 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       version: person1.version + 1,
     };
 
-    // Update person2: add person1 to spouseIds
     const updatedPerson2: Person = {
       ...person2,
       spouseIds: [...person2.spouseIds, personId1],
@@ -517,19 +653,42 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       version: person2.version + 1,
     };
 
-    const newPeople = new Map(people);
+    const oldPeople = get().people;
+    const newPeople = new Map(oldPeople);
     newPeople.set(personId1, updatedPerson1);
     newPeople.set(personId2, updatedPerson2);
-
-    // Force a new Map reference to ensure Zustand detects the change
     set({ people: new Map(newPeople) });
     
     if (__DEV__) {
       console.log(`[Store] Added spouse relationship: ${updatedPerson1.name} <-> ${updatedPerson2.name}`);
     }
+
+    // STEP 2: If no userId provided, skip database save
+    if (!userId) {
+      console.warn('[FamilyTreeStore] addSpouse called without userId - saving to local state only');
+      return;
+    }
+
+    try {
+      // Silent background save: Save to database without refetching
+      // Follows the same pattern as addUpdate: optimistic update → save to DB → no refetch
+      await createRelationship(userId, {
+        personOneId: personId1,
+        personTwoId: personId2,
+        relationshipType: 'spouse',
+      });
+    } catch (error: any) {
+      console.error('[FamilyTreeStore] Error saving spouse relationship to database:', error);
+      
+      // Rollback optimistic update on error
+      const rollbackPeople = new Map(oldPeople);
+      rollbackPeople.set(personId1, person1);
+      rollbackPeople.set(personId2, person2);
+      set({ people: rollbackPeople });
+    }
   },
 
-  addChild: (parentId, childId) => {
+  addChild: async (parentId, childId, userId) => {
     const { people } = get();
     const parent = people.get(parentId);
     const child = people.get(childId);
@@ -550,7 +709,7 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       return;
     }
 
-    // Update parent: add child to childIds
+    // STEP 1: Optimistic update
     const updatedParent: Person = {
       ...parent,
       childIds: [...parent.childIds, childId],
@@ -558,7 +717,6 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       version: parent.version + 1,
     };
 
-    // Update child: add parent to parentIds
     const updatedChild: Person = {
       ...child,
       parentIds: [...child.parentIds, parentId],
@@ -566,19 +724,42 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       version: child.version + 1,
     };
 
-    const newPeople = new Map(people);
+    const oldPeople = get().people;
+    const newPeople = new Map(oldPeople);
     newPeople.set(parentId, updatedParent);
     newPeople.set(childId, updatedChild);
-
-    // Force a new Map reference to ensure Zustand detects the change
     set({ people: new Map(newPeople) });
     
     if (__DEV__) {
       console.log(`[Store] Added child relationship: ${updatedParent.name} -> ${updatedChild.name}`);
     }
+
+    // STEP 2: If no userId provided, skip database save
+    if (!userId) {
+      console.warn('[FamilyTreeStore] addChild called without userId - saving to local state only');
+      return;
+    }
+
+    try {
+      // Silent background save: Save to database without refetching
+      // Follows the same pattern as addUpdate: optimistic update → save to DB → no refetch
+      await createRelationship(userId, {
+        personOneId: parentId,
+        personTwoId: childId,
+        relationshipType: 'child',
+      });
+    } catch (error: any) {
+      console.error('[FamilyTreeStore] Error saving child relationship to database:', error);
+      
+      // Rollback optimistic update on error
+      const rollbackPeople = new Map(oldPeople);
+      rollbackPeople.set(parentId, parent);
+      rollbackPeople.set(childId, child);
+      set({ people: rollbackPeople });
+    }
   },
 
-  addSibling: (personId1, personId2) => {
+  addSibling: async (personId1, personId2, userId) => {
     const { people } = get();
     const person1 = people.get(personId1);
     const person2 = people.get(personId2);
@@ -599,7 +780,8 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
       return;
     }
 
-    const newPeople = new Map(people);
+    const oldPeople = get().people;
+    const newPeople = new Map(oldPeople);
     let hasChanges = false;
 
     // Create direct bidirectional sibling relationship
@@ -675,11 +857,34 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     }
 
     if (hasChanges) {
-      // Force a new Map reference to ensure Zustand detects the change
+      // STEP 1: Optimistic update - update store immediately
       set({ people: new Map(newPeople) });
       
       if (__DEV__) {
         console.log(`[Store] Added sibling relationship: ${person1.name} <-> ${person2.name}`);
+      }
+
+      // STEP 2: If no userId provided, skip database save
+      if (!userId) {
+        console.warn('[FamilyTreeStore] addSibling called without userId - saving to local state only');
+        return;
+      }
+
+      try {
+        // Silent background save: Save to database without refetching
+        // Follows the same pattern as addUpdate: optimistic update → save to DB → no refetch
+        // Note: Parent linking logic above is frontend-only for now
+        // Can be enhanced later to create parent relationships via API if needed
+        await createRelationship(userId, {
+          personOneId: personId1,
+          personTwoId: personId2,
+          relationshipType: 'sibling',
+        });
+      } catch (error: any) {
+        console.error('[FamilyTreeStore] Error saving sibling relationship to database:', error);
+        
+        // Rollback optimistic update on error
+        set({ people: new Map(oldPeople) });
       }
     }
   },
@@ -712,6 +917,64 @@ export const useFamilyTreeStore = create<FamilyTreeStore>((set, get) => ({
     return Array.from(siblingIds)
       .map(id => people.get(id))
       .filter((p): p is Person => p !== undefined);
+  },
+
+  syncFamilyTree: async (userId) => {
+    // Prevent concurrent sync calls - if already syncing, skip
+    if (isSyncing) {
+      console.log('[DEBUG] syncFamilyTree: Already syncing, skipping duplicate call');
+      return;
+    }
+    
+    isSyncing = true;
+    console.log('[DEBUG] syncFamilyTree: Entry', { userId });
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:875',message:'syncFamilyTree entry',data:{userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    try {
+      // Load all people and relationships from backend
+      const peopleFromBackend = await getAllPeople();
+      console.log('[DEBUG] syncFamilyTree: Got people from backend', { 
+        peopleCount: peopleFromBackend.length,
+        peopleIds: peopleFromBackend.map(p => p.id),
+        peopleWithRelationships: peopleFromBackend.map(p => ({
+          id: p.id,
+          name: p.name,
+          parentIds: p.parentIds.length,
+          childIds: p.childIds.length,
+          spouseIds: p.spouseIds.length,
+          siblingIds: p.siblingIds.length
+        }))
+      });
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:878',message:'syncFamilyTree got people from backend',data:{peopleCount:peopleFromBackend.length,peopleIds:peopleFromBackend.map(p=>p.id),peopleWithRelationships:peopleFromBackend.map(p=>({id:p.id,name:p.name,parentIds:p.parentIds.length,childIds:p.childIds.length,spouseIds:p.spouseIds.length}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      // Convert array to Map for store
+      const peopleMap = new Map<string, Person>();
+      for (const person of peopleFromBackend) {
+        peopleMap.set(person.id, person);
+      }
+      
+      // Update store with data from backend
+      set({ people: peopleMap });
+      console.log('[DEBUG] syncFamilyTree: Updated store', { storePeopleSize: peopleMap.size });
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'family-tree-store.ts:887',message:'syncFamilyTree updated store',data:{storePeopleSize:peopleMap.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      
+      // Set ego if user has a profile
+      const ego = peopleFromBackend.find(p => p.linkedAuthUserId === userId);
+      if (ego) {
+        set({ egoId: ego.id });
+      }
+      
+      console.log('[FamilyTreeStore] Successfully synced family tree from backend');
+    } catch (error: any) {
+      console.error('[FamilyTreeStore] Error syncing family tree:', error);
+      // Don't throw - allow app to continue with local state
+    } finally {
+      isSyncing = false; // Always reset sync flag, even on error
+    }
   },
 }));
 

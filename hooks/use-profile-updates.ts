@@ -40,19 +40,24 @@ export interface UseProfileUpdatesResult {
  * @returns Object containing updates array, count, and person existence flag
  */
 export function useProfileUpdates(personId: string | null | undefined): UseProfileUpdatesResult {
-  // Subscribe to updates Map size - this is a primitive that Zustand can reliably detect changes on
-  // When updates are added/removed, the size changes, triggering re-renders
+  // Subscribe to updates Map directly - Zustand will detect when Map reference changes
+  // This includes when updates are added, removed, or modified (like soft-delete)
+  const updatesMap = useFamilyTreeStore((state) => state.updates);
+  
+  // Subscribe to updates Map size as a fallback trigger
   const updatesMapSize = useFamilyTreeStore((state) => state.updates.size);
   
-  // Subscribe to a stable serialized version of update IDs
-  // Use a selector that returns a primitive string - Zustand will detect string changes
-  const updatesKey = useFamilyTreeStore((state) => {
-    const keys = Array.from(state.updates.keys()).sort();
-    return keys.join(',');
+  // Subscribe to a serialized version that includes update metadata to detect value changes
+  // This ensures we detect soft-deletes (where size doesn't change but values do)
+  const updatesHash = useFamilyTreeStore((state) => {
+    const updates = Array.from(state.updates.values());
+    // Create a hash that includes update IDs and their deletedAt status
+    // This will change when an update is soft-deleted (deletedAt changes)
+    return updates.map(u => `${u.id}:${u.deletedAt || 'active'}`).sort().join(',');
   });
   
   // Memoize updates to prevent recalculation on every render
-  // updatesMapSize and updatesKey change when updates are added/removed, triggering recalculation
+  // updatesMap, updatesMapSize, and updatesHash change when updates change, triggering recalculation
   // Use getState() inside useMemo to ensure we always get the latest store state
   const updates = useMemo(() => {
     if (!personId) {
@@ -62,7 +67,7 @@ export function useProfileUpdates(personId: string | null | undefined): UseProfi
     // Using getState() ensures we always read the latest state, not a stale closure
     const state = useFamilyTreeStore.getState();
     return state.getUpdatesForPerson(personId);
-  }, [personId, updatesMapSize, updatesKey]); // Both trigger when Map changes
+  }, [personId, updatesMap, updatesMapSize, updatesHash]); // All trigger when Map changes
 
   // Memoize update count
   const updateCount = useMemo(() => {
@@ -71,7 +76,7 @@ export function useProfileUpdates(personId: string | null | undefined): UseProfi
     }
     const state = useFamilyTreeStore.getState();
     return state.getUpdateCount(personId);
-  }, [personId, updatesMapSize, updatesKey]); // Both trigger when Map changes
+  }, [personId, updatesMap, updatesMapSize, updatesHash]); // All trigger when Map changes
 
   // Subscribe to people Map size to detect when people are added/removed
   const peopleMapSize = useFamilyTreeStore((state) => state.people.size);

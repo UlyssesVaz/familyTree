@@ -57,6 +57,7 @@ export function useFamilyFeed(filter: FeedFilter = 'all'): UseFamilyFeedResult {
   // Memoize all family updates with enrichment
   const allUpdates = useMemo(() => {
     return Array.from(updatesMap.values())
+      .filter(update => !update.deletedAt) // Exclude soft-deleted updates
       .map(update => ({
         update,
         person: getPerson(update.personId),

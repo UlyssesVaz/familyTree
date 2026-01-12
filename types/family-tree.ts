@@ -75,6 +75,9 @@ export interface Person {
   
   /** IDs of updates where this person is tagged but has hidden from their profile */
   hiddenTaggedUpdateIds?: string[];
+  
+  /** Linked auth user ID - distinguishes Living (has linked user) vs Ancestor (null) profiles */
+  linkedAuthUserId?: string;
 }
 
 /**
@@ -107,6 +110,9 @@ export interface Update {
   
   /** User ID who created this update (for multi-user, optional for now) */
   createdBy?: string;
+  
+  /** Timestamp when update was soft-deleted (undefined = not deleted) */
+  deletedAt?: number;
 }
 
 /**

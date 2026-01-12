@@ -37,6 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const profileCheckRef = useRef<Promise<void> | null>(null);
   const initialRoutingDoneRef = useRef(false); // Track if initial routing decision has been made
   const previousSessionRef = useRef<AuthSession | null>(null); // Track previous session state for sign-in detection
+  const syncFamilyTreeDoneRef = useRef<string | null>(null); // Track if syncFamilyTree has been called for current session
 
   // Initialize auth state
   useEffect(() => {
@@ -76,8 +77,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // This ensures profile check always has permission to redirect after sign-in
         // Use ref to track previous session (callback closure may have stale state)
         if (newSession && !previousSessionRef.current) {
-          // Session just became truthy (sign-in happened)
+          // Session just became truthy (sign-in happened) - reset sync ref so it syncs
           initialRoutingDoneRef.current = false;
+          syncFamilyTreeDoneRef.current = null; // Reset so sync runs on sign-in (same or different user)
+        }
+        
+        // CRITICAL: Reset sync ref if userId changed (different user logged in)
+        // This ensures syncFamilyTree runs for each new user, not just once per app session
+        if (newSession && previousSessionRef.current) {
+          const previousUserId = previousSessionRef.current.user.id;
+          const newUserId = newSession.user.id;
+          if (previousUserId !== newUserId) {
+            // Different user logged in - reset sync ref so it syncs for the new user
+            syncFamilyTreeDoneRef.current = null;
+            console.log('[DEBUG] AuthContext: Different user logged in, resetting sync ref', { previousUserId, newUserId });
+          }
         }
         
         // Update ref to track session state for next callback
@@ -86,12 +100,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(newSession);
         setIsLoading(false);
         
-        // If session becomes null (sign out), clear ego immediately
+        // If session becomes null (sign out), clear ego immediately and reset sync ref
         if (!newSession) {
           const ego = useFamilyTreeStore.getState().getEgo();
           if (ego) {
             useFamilyTreeStore.getState().clearEgo();
           }
+          syncFamilyTreeDoneRef.current = null; // Reset so sync can run again on next sign-in
         }
       }
     });
@@ -125,6 +140,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (profile) {
           // User has profile → Load into Zustand
           useFamilyTreeStore.getState().loadEgo(profile);
+          
+          // CRITICAL: Sync entire family tree from backend ONCE per session (loads all people and relationships)
+          // This ensures relationships are loaded even if we only have ego profile initially
+          // Use ref to prevent multiple syncs if useEffect runs again
+          const currentUserId = session.user.id;
+          if (syncFamilyTreeDoneRef.current !== currentUserId) {
+            syncFamilyTreeDoneRef.current = currentUserId;
+            console.log('[DEBUG] AuthContext: Syncing family tree after loading ego');
+            try {
+              await useFamilyTreeStore.getState().syncFamilyTree(currentUserId);
+              console.log('[DEBUG] AuthContext: Family tree synced successfully');
+            } catch (error: any) {
+              console.error('[DEBUG] AuthContext: Error syncing family tree', error);
+              // Reset ref on error so it can retry on next check
+              syncFamilyTreeDoneRef.current = null;
+              // Don't fail auth flow if sync fails - relationships will be loaded on next sync
+            }
+          } else {
+            console.log('[DEBUG] AuthContext: syncFamilyTree already called for this session, skipping');
+          }
           
           // Profile exists → Make initial routing decision (ONLY ONCE)
           if (!initialRoutingDoneRef.current) {
@@ -173,7 +208,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     profileCheckRef.current = checkProfile();
-  }, [session, isLoading, isCheckingProfile]);
+    // NOTE: Removed isCheckingProfile from dependencies - it's only used as a guard, not a trigger
+    // This prevents the effect from re-running when isCheckingProfile changes
+  }, [session, isLoading]);
 
   // Routing guard: ONLY protects tabs access (security) and handles unauthenticated users
   // Initial routing decision is made in profile check useEffect (runs once)

@@ -15,8 +15,8 @@ import { uploadImage, STORAGE_BUCKETS } from './storage-api';
  * NOTE: updated_by and version columns are optional (may not exist in current schema)
  */
 interface PeopleRow {
-  id: string;
-  user_id: string | null;
+  // NOTE: people table uses user_id as primary key, NOT id
+  user_id: string; // Primary key - NOT NULL
   name: string;
   birth_date: string | null;
   death_date: string | null;
@@ -29,6 +29,7 @@ interface PeopleRow {
   created_by: string | null;
   updated_by?: string | null; // Optional - may not exist in schema
   version?: number; // Optional - may not exist in schema
+  linked_auth_user_id?: string | null; // Links to auth.users.id - distinguishes Living vs Ancestor profiles
 }
 
 /**
@@ -53,10 +54,12 @@ export interface CreatePersonInput {
 export async function getUserProfile(userId: string): Promise<Person | null> {
   const supabase = getSupabaseClient();
   
+  // NOTE: Query by linked_auth_user_id (not user_id) since user_id is now DB-generated
+  // linked_auth_user_id is the bridge to Supabase Auth (userId from auth.users)
   const { data, error } = await supabase
     .from('people')
     .select('*')
-    .eq('user_id', userId)
+    .eq('linked_auth_user_id', userId) // Query by linked_auth_user_id (bridge to Supabase Auth)
     .single();
   
   // PGRST116 = no rows returned (expected for new users)
@@ -80,15 +83,14 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
   
   // Explicitly map every database field to Person type
   // Handle optional columns gracefully
-  // CRITICAL: Use user_id as id if id doesn't exist (database schema uses user_id as primary key)
-  const personId = data.id || data.user_id;
-  if (!personId) {
-    console.error('[People API] No id or user_id found in database response:', data);
-    throw new Error('Database response missing identifier');
+  // CRITICAL: Database uses user_id as primary key (NOT id)
+  if (!data.user_id) {
+    console.error('[People API] No user_id found in database response:', data);
+    throw new Error('Database response missing user_id');
   }
   
   const person: Person = {
-    id: personId,
+    id: data.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
     name: data.name,
     birthDate: data.birth_date || undefined,
     deathDate: data.death_date || undefined,
@@ -106,6 +108,7 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
     updatedBy: (data as any).updated_by || undefined, // Optional column
     version: (data as any).version || 1, // Optional column, default to 1
     hiddenTaggedUpdateIds: undefined, // Will be loaded later if needed
+    linkedAuthUserId: data.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
   };
   
   // #region agent log
@@ -156,20 +159,21 @@ export async function createEgoProfile(
         photoUrl = uploadedUrl; // Use uploaded URL instead of local URI
       } else {
         console.warn('[People API] Photo upload returned null, continuing without photo');
-        photoUrl = null;
+        photoUrl = undefined;
       }
     } catch (error: any) {
       console.error('[People API] Error uploading photo:', error);
       // Don't fail the entire profile creation if photo upload fails
       // Continue without photo - user can add it later
-      photoUrl = null;
+      photoUrl = undefined;
     }
   }
   
   // STEP 2: Prepare database row (map TypeScript types to PostgreSQL schema)
-  // Only include columns that exist in your current schema
+  // NOTE: user_id is now DB-generated (gen_random_uuid()), not manually set
+  // NOTE: linked_auth_user_id is the bridge to Supabase Auth (userId from auth.users)
   const row = {
-    user_id: userId, // Required: links person to auth.users
+    // REMOVED: user_id - Let database generate it automatically
     name: input.name.trim(),
     birth_date: input.birthDate || null,
     death_date: null,
@@ -177,7 +181,8 @@ export async function createEgoProfile(
     photo_url: photoUrl || null, // Use uploaded URL or original remote URL
     bio: input.bio || null,
     phone_number: input.phoneNumber || null,
-    created_by: userId, // User creates their own profile
+    created_by: userId, // The curator (authenticated user who created this profile)
+    linked_auth_user_id: userId, // CRITICAL: Bridge to Supabase Auth - links profile to authenticated user
     // Note: updated_by and version columns don't exist in current schema
     // Add them here if you add the columns to your database
   };
@@ -217,15 +222,14 @@ export async function createEgoProfile(
   
   // STEP 4: Map database response to Person type
   // Explicitly map every database field to Person type
-  // CRITICAL: Use user_id as id if id doesn't exist (database schema uses user_id as primary key)
-  const personId = data.id || data.user_id;
-  if (!personId) {
-    console.error('[People API] No id or user_id found in create response:', data);
-    throw new Error('Database response missing identifier');
+  // CRITICAL: Database uses user_id as primary key (NOT id)
+  if (!data.user_id) {
+    console.error('[People API] No user_id found in create response:', data);
+    throw new Error('Database response missing user_id');
   }
   
   const person: Person = {
-    id: personId,
+    id: data.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
     name: data.name,
     birthDate: data.birth_date || undefined,
     deathDate: data.death_date || undefined,
@@ -243,6 +247,7 @@ export async function createEgoProfile(
     updatedBy: (data as any).updated_by || undefined, // Optional column
     version: (data as any).version || 1, // Optional column, default to 1
     hiddenTaggedUpdateIds: undefined,
+    linkedAuthUserId: data.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
   };
   
   return person;
@@ -273,8 +278,10 @@ export async function updateEgoProfile(
     throw new Error('Profile not found. Please create a profile first.');
   }
   
-  // Security check: Ensure user_id matches (user can only update their own profile)
-  if (existingProfile.id !== userId && existingProfile.createdBy !== userId) {
+  // Security check: Ensure linked_auth_user_id matches (user can only update their own profile)
+  // NOTE: existingProfile.id is now DB-generated user_id, not auth.uid()
+  // NOTE: We check linkedAuthUserId which is the bridge to Supabase Auth
+  if (existingProfile.linkedAuthUserId !== userId) {
     throw new Error('Unauthorized: You can only update your own profile.');
   }
   
@@ -339,11 +346,12 @@ export async function updateEgoProfile(
   // updateRow.updated_at = new Date().toISOString();
   
   // STEP 3: Update database row (only update fields that changed)
-  // Use user_id to identify the row (more reliable than id)
+  // NOTE: Query by linked_auth_user_id (not user_id) since user_id is now DB-generated
+  // linked_auth_user_id is the bridge to Supabase Auth (userId from auth.users)
   const { data, error } = await supabase
     .from('people')
     .update(updateRow)
-    .eq('user_id', userId) // Security: Only update if user_id matches
+    .eq('linked_auth_user_id', userId) // Security: Only update if linked_auth_user_id matches
     .select()
     .single();
   
@@ -357,14 +365,14 @@ export async function updateEgoProfile(
   }
   
   // STEP 4: Map database response to Person type
-  const personId = data.id || data.user_id;
-  if (!personId) {
-    console.error('[People API] No id or user_id found in update response:', data);
-    throw new Error('Database response missing identifier');
+  // CRITICAL: Database uses user_id as primary key (NOT id)
+  if (!data.user_id) {
+    console.error('[People API] No user_id found in update response:', data);
+    throw new Error('Database response missing user_id');
   }
   
   const person: Person = {
-    id: personId,
+    id: data.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
     name: data.name,
     birthDate: data.birth_date || undefined,
     deathDate: data.death_date || undefined,
@@ -382,7 +390,270 @@ export async function updateEgoProfile(
     updatedBy: (data as any).updated_by || undefined, // Optional column
     version: ((data as any).version || existingProfile.version) + 1, // Increment version if column exists
     hiddenTaggedUpdateIds: existingProfile.hiddenTaggedUpdateIds, // Keep existing hidden updates
+    linkedAuthUserId: data.linked_auth_user_id || existingProfile.linkedAuthUserId || undefined, // Preserve linked auth user ID
   };
   
   return person;
+}
+
+/**
+ * Create a new relative (non-ego person) in Supabase
+ * 
+ * IMPORTANT: 
+ * - Creates an Ancestor profile (linked_auth_user_id is NULL)
+ * - Uploads local photos to Supabase Storage before saving to database
+ * - Used for adding family members who don't have accounts yet
+ * 
+ * @param userId - The authenticated user's ID from auth.users (required for created_by)
+ * @param input - Person data to create
+ * @returns Created Person object
+ * @throws Error if creation fails
+ */
+export async function createRelative(
+  userId: string,
+  input: CreatePersonInput
+): Promise<Person> {
+  const supabase = getSupabaseClient();
+  
+  // STEP 1: Upload photo to Supabase Storage if it's a local file URI
+  let photoUrl: string | null = input.photoUrl || null;
+  
+  if (photoUrl?.startsWith('file://')) {
+    try {
+      const uploadedUrl = await uploadImage(
+        photoUrl,
+        STORAGE_BUCKETS.PERSON_PHOTOS,
+        `relatives/${userId}` // Organize by creator
+      );
+      
+      if (uploadedUrl) {
+        photoUrl = uploadedUrl;
+      } else {
+        console.warn('[People API] Photo upload returned null, continuing without photo');
+        photoUrl = null;
+      }
+    } catch (error: any) {
+      console.error('[People API] Error uploading photo:', error);
+      photoUrl = null;
+    }
+  }
+  
+  // STEP 2: Prepare database row
+  // NOTE: user_id is now DB-generated (gen_random_uuid()), not manually set
+  // NOTE: linked_auth_user_id is NULL for relatives (Ancestor/Shadow profiles)
+  // NOTE: Do NOT include 'id' - table only has user_id as primary key
+  // CRITICAL: created_by MUST match auth.uid() for RLS policy to allow insert
+  const row = {
+    // REMOVED: user_id - Let database generate it automatically
+    name: input.name.trim(),
+    birth_date: input.birthDate || null,
+    death_date: null,
+    gender: input.gender || null,
+    photo_url: photoUrl,
+    bio: input.bio || null,
+    phone_number: input.phoneNumber || null,
+    created_by: userId, // CRITICAL: MUST match the logged-in user's UUID (auth.uid()) for RLS policy
+    linked_auth_user_id: null, // Always null for new relatives (Ancestor/Shadow profiles)
+  };
+  
+  // STEP 4: Insert into database
+  // CRITICAL: .select() is required to get the new user_id back from the database
+  const { data, error } = await supabase
+    .from('people')
+    .insert(row)
+    .select() // This is important to get the new user_id back
+    .single();
+  
+  if (error) {
+    console.error('[People API] Error creating relative:', error);
+    throw new Error(`Failed to create relative: ${error.message}`);
+  }
+  
+  if (!data) {
+    throw new Error('Failed to create relative: No data returned');
+  }
+  
+  // STEP 5: Map database response to Person type
+  // NOTE: Database uses user_id as primary key (NOT id)
+  if (!data.user_id) {
+    throw new Error('Database response missing user_id');
+  }
+  
+  const person: Person = {
+    id: data.user_id, // Use user_id as the Person.id (frontend uses 'id' for consistency)
+    name: data.name,
+    birthDate: data.birth_date || undefined,
+    deathDate: data.death_date || undefined,
+    gender: (data.gender as Gender) || undefined,
+    photoUrl: data.photo_url || undefined,
+    bio: data.bio || undefined,
+    phoneNumber: data.phone_number || undefined,
+    parentIds: [], // New relative has no relationships yet
+    spouseIds: [],
+    childIds: [],
+    siblingIds: [],
+    createdAt: new Date(data.created_at).getTime(),
+    updatedAt: new Date(data.updated_at).getTime(),
+    createdBy: data.created_by || undefined,
+    updatedBy: (data as any).updated_by || undefined,
+    version: (data as any).version || 1,
+    hiddenTaggedUpdateIds: undefined,
+    linkedAuthUserId: data.linked_auth_user_id || undefined, // Should be null/undefined for relatives
+  };
+  
+  return person;
+}
+
+/**
+ * Get all people in the family tree
+ * 
+ * This function loads all people and their relationships from the database.
+ * Used for initial sync when app starts.
+ * 
+ * @returns Array of Person objects with relationships populated
+ */
+export async function getAllPeople(): Promise<Person[]> {
+  const supabase = getSupabaseClient();
+  
+  console.log('[DEBUG] getAllPeople: Fetching from database');
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:515',message:'getAllPeople entry',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
+  // STEP 1: Fetch all people and relationships in parallel for efficiency
+  // This is significantly faster than sequential fetching
+  const [peopleResponse, relationshipsResponse] = await Promise.all([
+    supabase.from('people').select('*').order('created_at', { ascending: true }),
+    supabase.from('relationships').select('*'),
+  ]);
+
+  const { data: peopleData, error: peopleError } = peopleResponse;
+  const { data: relationshipsData, error: relationshipsError } = relationshipsResponse;
+  
+  console.log('[DEBUG] getAllPeople: Fetched data', { 
+    peopleCount: peopleData?.length || 0,
+    relationshipsCount: relationshipsData?.length || 0,
+    relationshipsError: relationshipsError?.message 
+  });
+
+  if (peopleError) {
+    console.error('[People API] Error fetching people:', peopleError);
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:529',message:'getAllPeople people fetch error',data:{errorCode:peopleError.code,errorMessage:peopleError.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    throw new Error(`Failed to fetch people: ${peopleError.message}`);
+  }
+
+  if (!peopleData || peopleData.length === 0) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:534',message:'getAllPeople no people found',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    return []; // No people in database yet
+  }
+
+  if (relationshipsError) {
+    console.error('[People API] Error fetching relationships:', relationshipsError);
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:538',message:'getAllPeople relationships fetch error',data:{errorCode:relationshipsError.code,errorMessage:relationshipsError.message,errorDetails:relationshipsError,hint:relationshipsError.hint},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    // Don't fail - continue without relationships (can be loaded separately)
+  }
+  
+  // STEP 3: Build relationship maps for efficient lookup
+  const parentMap = new Map<string, string[]>(); // personId -> parentIds[]
+  const childMap = new Map<string, string[]>(); // personId -> childIds[]
+  const spouseMap = new Map<string, string[]>(); // personId -> spouseIds[]
+  const siblingMap = new Map<string, string[]>(); // personId -> siblingIds[]
+  
+  if (relationshipsData) {
+    for (const rel of relationshipsData) {
+      const personOneId = rel.person_one_id;
+      const personTwoId = rel.person_two_id;
+      const type = rel.relationship_type;
+      
+      switch (type) {
+        case 'parent':
+          // person_one is parent of person_two
+          const childIds = childMap.get(personOneId) || [];
+          if (!childIds.includes(personTwoId)) {
+            childMap.set(personOneId, [...childIds, personTwoId]);
+          }
+          const parentIds = parentMap.get(personTwoId) || [];
+          if (!parentIds.includes(personOneId)) {
+            parentMap.set(personTwoId, [...parentIds, personOneId]);
+          }
+          break;
+          
+        case 'child':
+          // person_one is child of person_two (reverse of parent)
+          const childIds2 = childMap.get(personTwoId) || [];
+          if (!childIds2.includes(personOneId)) {
+            childMap.set(personTwoId, [...childIds2, personOneId]);
+          }
+          const parentIds2 = parentMap.get(personOneId) || [];
+          if (!parentIds2.includes(personTwoId)) {
+            parentMap.set(personOneId, [...parentIds2, personTwoId]);
+          }
+          break;
+          
+        case 'spouse':
+          // Bidirectional relationship
+          const spouseIds1 = spouseMap.get(personOneId) || [];
+          if (!spouseIds1.includes(personTwoId)) {
+            spouseMap.set(personOneId, [...spouseIds1, personTwoId]);
+          }
+          const spouseIds2 = spouseMap.get(personTwoId) || [];
+          if (!spouseIds2.includes(personOneId)) {
+            spouseMap.set(personTwoId, [...spouseIds2, personOneId]);
+          }
+          break;
+          
+        case 'sibling':
+          // Bidirectional relationship
+          const siblingIds1 = siblingMap.get(personOneId) || [];
+          if (!siblingIds1.includes(personTwoId)) {
+            siblingMap.set(personOneId, [...siblingIds1, personTwoId]);
+          }
+          const siblingIds2 = siblingMap.get(personTwoId) || [];
+          if (!siblingIds2.includes(personOneId)) {
+            siblingMap.set(personTwoId, [...siblingIds2, personOneId]);
+          }
+          break;
+      }
+    }
+  }
+  
+  // STEP 4: Map database rows to Person objects with relationships
+  // CRITICAL: Database uses user_id as primary key (NOT id)
+  const people: Person[] = peopleData
+    .filter((row) => row.user_id != null) // Filter out rows without user_id
+    .map((row) => {
+      const personId = row.user_id!; // We know it's not null from filter above
+      
+      return {
+        id: personId, // Use user_id as Person.id (frontend uses 'id' for consistency)
+        name: row.name,
+        birthDate: row.birth_date || undefined,
+        deathDate: row.death_date || undefined,
+        gender: (row.gender as Gender) || undefined,
+        photoUrl: row.photo_url || undefined,
+        bio: row.bio || undefined,
+        phoneNumber: row.phone_number || undefined,
+        parentIds: parentMap.get(personId) || [],
+        spouseIds: spouseMap.get(personId) || [],
+        childIds: childMap.get(personId) || [],
+        siblingIds: siblingMap.get(personId) || [],
+        createdAt: new Date(row.created_at).getTime(),
+        updatedAt: new Date(row.updated_at).getTime(),
+        createdBy: row.created_by || undefined,
+        updatedBy: (row as any).updated_by || undefined,
+        version: (row as any).version || 1,
+        hiddenTaggedUpdateIds: undefined, // Will be loaded from updates if needed
+        linkedAuthUserId: row.linked_auth_user_id || undefined,
+      };
+    });
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:637',message:'getAllPeople returning',data:{peopleCount:people.length,relationshipsCount:relationshipsData?.length||0,peopleIds:people.map(p=>p.id),relationshipIds:relationshipsData?.map(r=>`${r.person_one_id}->${r.person_two_id}:${r.relationship_type}`)||[]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
+  return people;
 }

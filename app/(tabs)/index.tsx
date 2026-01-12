@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, View, Platform, Alert, ScrollView, Dimensions, Share } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useAuth } from '@/contexts/auth-context';
 
 import {
   PersonCard,
@@ -171,6 +172,8 @@ function GenerationRow({
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { session } = useAuth();
+  const userId = session?.user?.id;
   const egoId = useFamilyTreeStore((state) => state.egoId);
   
   // Use the custom hook to get all tree layout calculations
@@ -237,7 +240,7 @@ export default function HomeScreen() {
     setShowAddPersonModal(true);
   };
 
-  const handleAddPerson = (data: {
+  const handleAddPerson = async (data: {
     name: string;
     photoUrl?: string;
     birthDate?: string;
@@ -248,29 +251,34 @@ export default function HomeScreen() {
       return;
     }
 
+    if (!userId) {
+      Alert.alert('Error', 'You must be logged in to add a person.');
+      return;
+    }
+
     const addPerson = useFamilyTreeStore.getState().addPerson;
     const addParent = useFamilyTreeStore.getState().addParent;
     const addSpouse = useFamilyTreeStore.getState().addSpouse;
     const addChild = useFamilyTreeStore.getState().addChild;
     const addSibling = useFamilyTreeStore.getState().addSibling;
 
-    // Create the new person
-    const newPersonId = addPerson(data);
-
-    // Create the relationship based on type
     try {
+      // Create the new person (await async call and pass userId)
+      const newPersonId = await addPerson(data, userId);
+
+      // Create the relationship based on type (await async calls and pass userId)
       switch (selectedRelativeType) {
         case 'parent':
-          addParent(selectedPerson.id, newPersonId);
+          await addParent(selectedPerson.id, newPersonId, userId);
           break;
         case 'spouse':
-          addSpouse(selectedPerson.id, newPersonId);
+          await addSpouse(selectedPerson.id, newPersonId, userId);
           break;
         case 'child':
-          addChild(selectedPerson.id, newPersonId);
+          await addChild(selectedPerson.id, newPersonId, userId);
           break;
         case 'sibling':
-          addSibling(selectedPerson.id, newPersonId);
+          await addSibling(selectedPerson.id, newPersonId, userId);
           if (__DEV__) {
             console.log(`[Add Sibling] Added sibling relationship between ${selectedPerson.name} and ${data.name}`);
           }
@@ -305,16 +313,19 @@ export default function HomeScreen() {
                   }, 300);
                 } catch (error) {
                   console.error('Error sharing invite:', error);
-                  // Share.share doesn't throw errors, but just in case
                 }
               },
             },
           ]
         );
-      }, 300); // Wait for modal close animation
-    } catch (error) {
-      console.error('Error adding person:', error);
-      Alert.alert('Error', 'Failed to add person. Please try again.');
+      }, 300);
+    } catch (error: any) {
+      console.error('[HomeScreen] Error adding person:', error);
+      Alert.alert(
+        'Error',
+        error?.message || 'Failed to add person. Please try again.',
+        [{ text: 'OK' }]
+      );
     }
   };
 

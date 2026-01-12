@@ -48,14 +48,47 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
   // Only subscribe to peopleSize, not the people Map itself (prevents constant re-renders)
   // The people Map reference changes on every update, but size only changes when people are added/removed
   const peopleSize = useFamilyTreeStore((state) => state.people.size);
+  
+  // CRITICAL FIX: Track relationship changes, not just people size
+  // When relationships are added, peopleSize doesn't change, but relationship arrays do
+  // We need to recalculate when relationships change
+  // Use a stable hash that only changes when relationships actually change
+  const relationshipsHash = useFamilyTreeStore((state) => {
+    // Create a stable hash string of all relationship IDs to detect changes
+    // Sorting ensures stable hash even if order changes
+    const allRelationshipIds: string[] = [];
+    for (const person of state.people.values()) {
+      // Include counts and IDs for each relationship type
+      allRelationshipIds.push(`${person.id}:parents:${person.parentIds.length}:${person.parentIds.sort().join(',')}`);
+      allRelationshipIds.push(`${person.id}:children:${person.childIds.length}:${person.childIds.sort().join(',')}`);
+      allRelationshipIds.push(`${person.id}:spouses:${person.spouseIds.length}:${person.spouseIds.sort().join(',')}`);
+      allRelationshipIds.push(`${person.id}:siblings:${person.siblingIds.length}:${person.siblingIds.sort().join(',')}`);
+    }
+    // Sort to ensure stable hash
+    const hashString = allRelationshipIds.sort().join('|');
+    // Simple hash from string
+    let hash = 0;
+    for (let i = 0; i < hashString.length; i++) {
+      const char = hashString.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return hash;
+  });
 
-  // Get ego person - only recalculate when egoId or peopleSize changes
+  // Get ego person - recalculate when egoId, peopleSize, or relationships change
   // Access people from store state inside memo (getState() doesn't cause re-renders)
   const ego = useMemo(() => {
     if (!egoId) return null;
     const people = useFamilyTreeStore.getState().people;
-    return people.get(egoId) || null;
-  }, [egoId, peopleSize]);
+    const egoPerson = people.get(egoId) || null;
+    // #region agent log
+    if (egoPerson && typeof fetch !== 'undefined') {
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-323722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-tree-layout.ts:74',message:'useTreeLayout ego person found',data:{egoId,egoName:egoPerson.name,egoParentIds:egoPerson.parentIds,egoChildIds:egoPerson.childIds,egoSpouseIds:egoPerson.spouseIds,egoSiblingIds:egoPerson.siblingIds,relationshipsHash},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    }
+    // #endregion
+    return egoPerson;
+  }, [egoId, peopleSize, relationshipsHash]);
 
   // Recursively get all ancestor generations (parents, grandparents, etc.)
   // Includes siblings of each person in each generation
@@ -134,9 +167,9 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
     // }
     
     return result;
-    // Only depend on egoId and peopleSize - access store via getState() inside memo
-    // This prevents constant recalculations when Map reference changes but content doesn't
-  }, [egoId, peopleSize, ego?.id]);
+    // Recalculate when ego, peopleSize, or relationships change
+    // relationshipsHash ensures we recalculate when relationships are added/removed
+  }, [egoId, peopleSize, relationshipsHash, ego?.id]);
 
   // Recursively get all descendant generations (children, grandchildren, etc.)
   // Includes siblings of each person in each generation
@@ -211,9 +244,9 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
     // }
     
     return generations;
-    // Only depend on egoId and peopleSize - access store via getState() inside memo
-    // This prevents constant recalculations when Map reference changes but content doesn't
-  }, [egoId, peopleSize, ego?.id]);
+    // Recalculate when ego, peopleSize, or relationships change
+    // relationshipsHash ensures we recalculate when relationships are added/removed
+  }, [egoId, peopleSize, relationshipsHash, ego?.id]);
 
   // Get ego's immediate relationships (for ego row)
   const { spouses, siblings } = useMemo(() => {
@@ -231,7 +264,7 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
     const siblings = getSiblings(ego.id);
 
     return { spouses, siblings };
-  }, [ego, peopleSize]); // Only depend on ego and peopleSize
+  }, [ego, peopleSize, relationshipsHash]); // Recalculate when relationships change
 
   return {
     ancestorGenerations,
