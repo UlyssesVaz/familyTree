@@ -1,4 +1,4 @@
-// URL polyfill MUST be imported first - required for Supabase in React Native
+// required for Supabase in React Native
 import 'react-native-url-polyfill/auto';
 
 // Polyfill for crypto.getRandomValues() - only needed on native platforms
@@ -21,6 +21,7 @@ import { AuthProvider } from '@/contexts/auth-context';
 import { ErrorProvider } from '@/contexts/error-context';
 import { ModalProvider } from '@/contexts/modal-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { StatsigProvider } from '@/components/StatsigProvider';
 
 // Supabase will be initialized when auth service is first used
 // No initialization needed here - Supabase client initializes lazily
@@ -52,9 +53,13 @@ export default function RootLayout() {
           <ColorSchemeProvider>
             <ErrorProvider>
               <ModalProvider>
-                <AuthProvider>
-                  <RootLayoutNav />
-                </AuthProvider>
+                {/* PRO APPROACH: Statsig starts immediately as guest, above AuthProvider */}
+                {/* This ensures Statsig is ready to catch telemetry from AuthProvider itself */}
+                <StatsigProvider>
+                  <AuthProvider>
+                    <RootLayoutNav />
+                  </AuthProvider>
+                </StatsigProvider>
               </ModalProvider>
             </ErrorProvider>
           </ColorSchemeProvider>

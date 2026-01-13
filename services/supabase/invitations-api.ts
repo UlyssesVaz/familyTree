@@ -7,6 +7,7 @@
 
 import { getSupabaseClient } from './supabase-init';
 import { v4 as uuidv4 } from 'uuid';
+import { handleSupabaseQuery, handleSupabaseMutation } from '@/utils/supabase-error-handler';
 
 export interface InvitationLink {
   id: string;
@@ -56,18 +57,18 @@ export async function createInvitationLink(
     .select()
     .single();
 
-  if (error) {
-    console.error('[Invitations API] Error creating invitation link:', error);
-    throw new Error(`Failed to create invitation link: ${error.message}`);
-  }
+  const result = handleSupabaseMutation(data, error, {
+    apiName: 'Invitations API',
+    operation: 'create invitation link',
+  });
 
   return {
-    id: data.id,
-    targetPersonId: data.target_person_id,
-    token: data.token,
-    expiresAt: data.expires_at,
-    createdAt: data.created_at,
-    createdBy: data.created_by,
+    id: result.id,
+    targetPersonId: result.target_person_id,
+    token: result.token,
+    expiresAt: result.expires_at,
+    createdAt: result.created_at,
+    createdBy: result.created_by,
   };
 }
 
@@ -86,28 +87,29 @@ export async function getInvitationLink(token: string): Promise<InvitationLink |
     .eq('token', token)
     .single();
 
-  if (error) {
-    if (error.code === 'PGRST116') {
-      // No rows returned
-      return null;
-    }
-    console.error('[Invitations API] Error getting invitation link:', error);
-    throw new Error(`Failed to get invitation link: ${error.message}`);
+  // Handle error - allow null for "not found" (PGRST116)
+  const result = handleSupabaseQuery(data, error, {
+    apiName: 'Invitations API',
+    operation: 'get invitation link',
+  });
+  
+  if (!result) {
+    return null;
   }
 
   // Check if expired
-  const expiresAt = new Date(data.expires_at);
+  const expiresAt = new Date(result.expires_at);
   if (expiresAt < new Date()) {
     return null; // Expired
   }
 
   return {
-    id: data.id,
-    targetPersonId: data.target_person_id,
-    token: data.token,
-    expiresAt: data.expires_at,
-    createdAt: data.created_at,
-    createdBy: data.created_by,
+    id: result.id,
+    targetPersonId: result.target_person_id,
+    token: result.token,
+    expiresAt: result.expires_at,
+    createdAt: result.created_at,
+    createdBy: result.created_by,
   };
 }
 
@@ -143,8 +145,10 @@ export async function claimInvitationLink(
     .eq('user_id', invitation.targetPersonId);
 
   if (updateError) {
-    console.error('[Invitations API] Error updating linked_auth_user_id:', updateError);
-    throw new Error(`Failed to claim profile: ${updateError.message}`);
+    handleSupabaseMutation(null, updateError, {
+      apiName: 'Invitations API',
+      operation: 'claim invitation (update linked_auth_user_id)',
+    });
   }
 
   // Step 2: Delete the invitation link (prevent double-claiming)
@@ -183,9 +187,12 @@ export async function getInvitationLinksForPerson(
     .gt('expires_at', new Date().toISOString()) // Only non-expired
     .order('created_at', { ascending: false });
 
+  // Handle error - allow empty array for "not found" or errors
   if (error) {
-    console.error('[Invitations API] Error getting invitation links:', error);
-    throw new Error(`Failed to get invitation links: ${error.message}`);
+    handleSupabaseMutation(data, error, {
+      apiName: 'Invitations API',
+      operation: 'get invitation links',
+    });
   }
 
   return (data || []).map((row) => ({

@@ -9,6 +9,7 @@ import { getSupabaseClient } from './supabase-init';
 import type { Update } from '@/types/family-tree';
 import { uploadImage, deleteImage, STORAGE_BUCKETS } from './storage-api';
 import { v4 as uuidv4 } from 'uuid';
+import { handleSupabaseMutation } from '@/utils/supabase-error-handler';
 
 /**
  * Database row type for updates table
@@ -134,14 +135,10 @@ export async function createUpdate(
     .select()
     .single();
   
-  if (error) {
-    console.error('[Updates API] Error creating update:', error);
-    throw new Error(`Failed to create update: ${error.message}`);
-  }
-  
-  if (!data) {
-    throw new Error('Failed to create update: No data returned');
-  }
+  const result = handleSupabaseMutation(data, error, {
+    apiName: 'Updates API',
+    operation: 'create update',
+  });
   
   // STEP 5: Create update_tags entries if taggedPersonIds provided
   if (input.taggedPersonIds && input.taggedPersonIds.length > 0) {
@@ -156,7 +153,8 @@ export async function createUpdate(
       .insert(tagRows);
     
     if (tagsError) {
-      console.error('[Updates API] Error creating update tags:', tagsError);
+      // Non-fatal error - log but don't fail the update creation
+      console.error('[Updates API] Error creating update tags (non-fatal):', tagsError);
       // Don't fail the entire update if tags fail - update is already created
       // Log error but continue
     }
@@ -165,16 +163,16 @@ export async function createUpdate(
   // STEP 6: Map database response to Update type
   const update: Update = {
     id: updatesId, // UUID primary key
-    personId: data.user_id, // The person this update belongs to
-    title: data.title,
-    photoUrl: data.photo_url || '', // Required field, use empty string if null
-    caption: data.caption || undefined,
-    isPublic: data.is_public,
+    personId: result.user_id, // The person this update belongs to
+    title: result.title,
+    photoUrl: result.photo_url || '', // Required field, use empty string if null
+    caption: result.caption || undefined,
+    isPublic: result.is_public,
     taggedPersonIds: input.taggedPersonIds && input.taggedPersonIds.length > 0 
       ? input.taggedPersonIds 
       : undefined,
-    createdAt: new Date(data.created_at).getTime(),
-    createdBy: data.created_by, // The user who created this update
+    createdAt: new Date(result.created_at).getTime(),
+    createdBy: result.created_by, // The user who created this update
   };
   
   return update;

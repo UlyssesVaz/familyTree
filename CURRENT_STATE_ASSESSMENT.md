@@ -68,27 +68,7 @@
 
 ---
 
-## ✅ Invitation System - COMPLETE!
-
-### **Status:** ✅ **FULLY IMPLEMENTED AND WORKING**
-
-**What's Working:**
-- ✅ Generate invitation links for ancestor profiles
-- ✅ Share links via native Share sheet
-- ✅ Deep linking (`familytreeapp://join/[token]`)
-- ✅ Join screen with Google SSO button
-- ✅ Automatic profile claiming after sign-in
-- ✅ Multi-user support (different Google accounts can claim different profiles)
-
-**Implementation:**
-- `services/supabase/invitations-api.ts` - Full CRUD for invitation links
-- `app/join/[token].tsx` - Join/claim screen with auth flow
-- Invite button on person profiles (for ancestor profiles)
-- Auto-invite when adding new people
-
----
-
-## 🚀 Next Steps: Code Efficiency (Optional)
+## 🚀 Next Core Feature: Invitation System
 
 ### **Overview**
 Allow family members to invite relatives to claim their profiles. When someone signs up via an invite link, their profile's `linked_auth_user_id` gets set, converting an "Ancestor Profile" to a "Living Profile."

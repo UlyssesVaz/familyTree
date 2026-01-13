@@ -7,6 +7,7 @@
 
 import { getSupabaseClient } from './supabase-init';
 import { v4 as uuidv4 } from 'uuid';
+import { handleSupabaseMutation, handleDuplicateKeyError } from '@/utils/supabase-error-handler';
 
 /**
  * Database row type for relationships table
@@ -97,30 +98,39 @@ export async function createRelationship(
     .select()
     .single();
 
-  if (error) {
-    console.error('[Relationships API] Error creating relationship:', error);
+  // Handle duplicate key error with recovery (race condition)
+  try {
+    const result = handleSupabaseMutation(data, error, {
+      apiName: 'Relationships API',
+      operation: 'create relationship',
+    });
     
-    // Handle duplicate key error (race condition)
-    if (error.code === '23505') {
-      // Relationship was created concurrently - try to fetch it
-      const { data: existing } = await supabase
-        .from('relationships')
-        .select('id')
-        .eq('person_one_id', input.personOneId)
-        .eq('person_two_id', input.personTwoId)
-        .eq('relationship_type', input.relationshipType)
-        .single();
-      
-      if (existing) {
-        return existing.id;
-      }
+    if (__DEV__) {
+      console.log('[Relationships API] Relationship created:', { relationshipId: result.id, relationshipType: input.relationshipType });
     }
     
-    throw new Error(`Failed to create relationship: ${error.message}`);
-  }
-  
-  if (!data) {
-    throw new Error('Failed to create relationship: No data returned');
+    return result.id;
+  } catch (err: any) {
+    // Check if it's a duplicate key error and try to recover
+    if (error?.code === '23505') {
+      return await handleDuplicateKeyError(
+        error,
+        async () => {
+          const { data: existing } = await supabase
+            .from('relationships')
+            .select('id')
+            .eq('person_one_id', input.personOneId)
+            .eq('person_two_id', input.personTwoId)
+            .eq('relationship_type', input.relationshipType)
+            .single();
+          return existing ? { id: existing.id } : null;
+        },
+        'Relationships API',
+        'create relationship'
+      ).then(r => r.id);
+    }
+    // Re-throw if not a duplicate key error
+    throw err;
   }
 
   if (__DEV__) {
@@ -144,10 +154,13 @@ export async function getRelationshipsForPerson(personId: string): Promise<Relat
     .from('relationships')
     .select('*')
     .or(`person_one_id.eq.${personId},person_two_id.eq.${personId}`);
-  
+
+  // Handle error - allow empty array for "not found"
   if (error) {
-    console.error('[Relationships API] Error fetching relationships:', error);
-    throw new Error(`Failed to fetch relationships: ${error.message}`);
+    handleSupabaseMutation(data, error, {
+      apiName: 'Relationships API',
+      operation: 'fetch relationships for person',
+    });
   }
   
   return data || [];

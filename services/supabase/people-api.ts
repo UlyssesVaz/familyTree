@@ -8,6 +8,7 @@
 import { getSupabaseClient } from './supabase-init';
 import type { Person, Gender } from '@/types/family-tree';
 import { uploadImage, STORAGE_BUCKETS } from './storage-api';
+import { handleSupabaseQuery, handleSupabaseMutation, handleDuplicateKeyError } from '@/utils/supabase-error-handler';
 
 /**
  * Database row type for people table
@@ -62,18 +63,13 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
     .eq('linked_auth_user_id', userId) // Query by linked_auth_user_id (bridge to Supabase Auth)
     .single();
   
-  // PGRST116 = no rows returned (expected for new users)
-  if (error) {
-    if (error.code === 'PGRST116') {
-      // No profile found - this is a new user
-      return null;
-    }
-    // Actual error - rethrow
-    console.error('[People API] Error fetching user profile:', error);
-    throw new Error(`Failed to fetch user profile: ${error.message}`);
-  }
+  // Handle error - allow null for "not found" (PGRST116)
+  const result = handleSupabaseQuery(data, error, {
+    apiName: 'People API',
+    operation: 'fetch user profile',
+  });
   
-  if (!data) {
+  if (!result) {
     return null;
   }
   
@@ -98,13 +94,13 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
     spouseIds: [], // Will be loaded from relationships table later
     childIds: [], // Will be loaded from relationships table later
     siblingIds: [], // Will be loaded from relationships table later
-    createdAt: new Date(data.created_at).getTime(),
-    updatedAt: new Date(data.updated_at).getTime(),
-    createdBy: data.created_by || undefined,
-    updatedBy: (data as any).updated_by || undefined, // Optional column
-    version: (data as any).version || 1, // Optional column, default to 1
+    createdAt: new Date(result.created_at).getTime(),
+    updatedAt: new Date(result.updated_at).getTime(),
+    createdBy: result.created_by || undefined,
+    updatedBy: (result as any).updated_by || undefined, // Optional column
+    version: (result as any).version || 1, // Optional column, default to 1
     hiddenTaggedUpdateIds: undefined, // Will be loaded later if needed
-    linkedAuthUserId: data.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
+    linkedAuthUserId: result.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
   };
   
   return person;
@@ -180,62 +176,64 @@ export async function createEgoProfile(
   };
   
   // STEP 3: Insert into database (atomic operation)
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('people')
     .insert(row)
     .select()
     .single();
   
-  if (error) {
-    console.error('[People API] Error creating ego profile:', error);
-    
-    // Handle specific error cases
-    if (error.code === '23505') {
-      // Duplicate key error - profile might have been created between check and insert
-      // Try to fetch existing profile
-      const existingProfile = await getUserProfile(userId);
+  // Handle duplicate key error with recovery (race condition)
+  let result;
+  try {
+    result = handleSupabaseMutation(data, error, {
+      apiName: 'People API',
+      operation: 'create ego profile',
+    });
+  } catch (err: any) {
+    // Check if it's a duplicate key error and try to recover
+    if (error?.code === '23505') {
+      const existingProfile = await handleDuplicateKeyError(
+        error,
+        () => getUserProfile(userId),
+        'People API',
+        'create ego profile'
+      );
       if (existingProfile) {
-        console.warn('[People API] Profile was created concurrently, returning existing profile');
         return existingProfile;
       }
-      throw new Error('Profile already exists. Please refresh and try again.');
     }
-    
-    throw new Error(`Failed to create profile: ${error.message}`);
-  }
-  
-  if (!data) {
-    throw new Error('Failed to create profile: No data returned');
+    // Re-throw if not a duplicate key error or recovery failed
+    throw err;
   }
   
   // STEP 4: Map database response to Person type
   // Explicitly map every database field to Person type
   // CRITICAL: Database uses user_id as primary key (NOT id)
-  if (!data.user_id) {
-    console.error('[People API] No user_id found in create response:', data);
+  if (!result.user_id) {
+    console.error('[People API] No user_id found in create response:', result);
     throw new Error('Database response missing user_id');
   }
   
   const person: Person = {
-    id: data.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
-    name: data.name,
-    birthDate: data.birth_date || undefined,
-    deathDate: data.death_date || undefined,
-    gender: (data.gender as Gender) || undefined,
-    photoUrl: data.photo_url || undefined,
-    bio: data.bio || undefined,
-    phoneNumber: data.phone_number || undefined,
+    id: result.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
+    name: result.name,
+    birthDate: result.birth_date || undefined,
+    deathDate: result.death_date || undefined,
+    gender: (result.gender as Gender) || undefined,
+    photoUrl: result.photo_url || undefined,
+    bio: result.bio || undefined,
+    phoneNumber: result.phone_number || undefined,
     parentIds: [], // New profile has no relationships yet
     spouseIds: [],
     childIds: [],
     siblingIds: [],
-    createdAt: new Date(data.created_at).getTime(),
-    updatedAt: new Date(data.updated_at).getTime(),
-    createdBy: data.created_by || undefined,
-    updatedBy: (data as any).updated_by || undefined, // Optional column
-    version: (data as any).version || 1, // Optional column, default to 1
+    createdAt: new Date(result.created_at).getTime(),
+    updatedAt: new Date(result.updated_at).getTime(),
+    createdBy: result.created_by || undefined,
+    updatedBy: (result as any).updated_by || undefined, // Optional column
+    version: (result as any).version || 1, // Optional column, default to 1
     hiddenTaggedUpdateIds: undefined,
-    linkedAuthUserId: data.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
+    linkedAuthUserId: result.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
   };
   
   return person;
@@ -343,24 +341,20 @@ export async function updateEgoProfile(
     .select()
     .single();
   
-  if (error) {
-    console.error('[People API] Error updating ego profile:', error);
-    throw new Error(`Failed to update profile: ${error.message}`);
-  }
-  
-  if (!data) {
-    throw new Error('Failed to update profile: No data returned');
-  }
+  const result = handleSupabaseMutation(data, error, {
+    apiName: 'People API',
+    operation: 'update ego profile',
+  });
   
   // STEP 4: Map database response to Person type
   // CRITICAL: Database uses user_id as primary key (NOT id)
-  if (!data.user_id) {
-    console.error('[People API] No user_id found in update response:', data);
+  if (!result.user_id) {
+    console.error('[People API] No user_id found in update response:', result);
     throw new Error('Database response missing user_id');
   }
   
   const person: Person = {
-    id: data.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
+    id: result.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
     name: data.name,
     birthDate: data.birth_date || undefined,
     deathDate: data.death_date || undefined,
@@ -452,41 +446,37 @@ export async function createRelative(
     .select() // This is important to get the new user_id back
     .single();
   
-  if (error) {
-    console.error('[People API] Error creating relative:', error);
-    throw new Error(`Failed to create relative: ${error.message}`);
-  }
-  
-  if (!data) {
-    throw new Error('Failed to create relative: No data returned');
-  }
+  const result = handleSupabaseMutation(data, error, {
+    apiName: 'People API',
+    operation: 'create relative',
+  });
   
   // STEP 5: Map database response to Person type
   // NOTE: Database uses user_id as primary key (NOT id)
-  if (!data.user_id) {
+  if (!result.user_id) {
     throw new Error('Database response missing user_id');
   }
   
   const person: Person = {
-    id: data.user_id, // Use user_id as the Person.id (frontend uses 'id' for consistency)
-    name: data.name,
-    birthDate: data.birth_date || undefined,
-    deathDate: data.death_date || undefined,
-    gender: (data.gender as Gender) || undefined,
-    photoUrl: data.photo_url || undefined,
-    bio: data.bio || undefined,
-    phoneNumber: data.phone_number || undefined,
+    id: result.user_id, // Use user_id as the Person.id (frontend uses 'id' for consistency)
+    name: result.name,
+    birthDate: result.birth_date || undefined,
+    deathDate: result.death_date || undefined,
+    gender: (result.gender as Gender) || undefined,
+    photoUrl: result.photo_url || undefined,
+    bio: result.bio || undefined,
+    phoneNumber: result.phone_number || undefined,
     parentIds: [], // New relative has no relationships yet
     spouseIds: [],
     childIds: [],
     siblingIds: [],
-    createdAt: new Date(data.created_at).getTime(),
-    updatedAt: new Date(data.updated_at).getTime(),
-    createdBy: data.created_by || undefined,
-    updatedBy: (data as any).updated_by || undefined,
-    version: (data as any).version || 1,
+    createdAt: new Date(result.created_at).getTime(),
+    updatedAt: new Date(result.updated_at).getTime(),
+    createdBy: result.created_by || undefined,
+    updatedBy: (result as any).updated_by || undefined,
+    version: (result as any).version || 1,
     hiddenTaggedUpdateIds: undefined,
-    linkedAuthUserId: data.linked_auth_user_id || undefined, // Should be null/undefined for relatives
+    linkedAuthUserId: result.linked_auth_user_id || undefined, // Should be null/undefined for relatives
   };
   
   return person;
@@ -520,17 +510,24 @@ export async function getAllPeople(): Promise<Person[]> {
     });
   }
 
+  // Handle people fetch error (must throw if error)
   if (peopleError) {
-    console.error('[People API] Error fetching people:', peopleError);
-    throw new Error(`Failed to fetch people: ${peopleError.message}`);
+    handleSupabaseMutation(peopleData, peopleError, {
+      apiName: 'People API',
+      operation: 'fetch people',
+    });
+    return []; // Never reached, but satisfies TypeScript
   }
 
   if (!peopleData || peopleData.length === 0) {
     return []; // No people in database yet
   }
 
+  // Handle relationships fetch error (non-fatal - continue without relationships)
   if (relationshipsError) {
-    console.error('[People API] Error fetching relationships:', relationshipsError);
+    if (__DEV__) {
+      console.warn('[People API] Error fetching relationships (non-fatal):', relationshipsError);
+    }
     // Don't fail - continue without relationships (can be loaded separately)
   }
   

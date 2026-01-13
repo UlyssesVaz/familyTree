@@ -11,6 +11,7 @@ import { AuthSession, AuthProvider as AuthProviderType, AuthError } from '@/serv
 import { getAuthService } from '@/services/auth';
 import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { getUserProfile } from '@/services/supabase/people-api';
+import { useStatsigClient } from '@statsig/expo-bindings';
 
 interface AuthContextType {
   session: AuthSession | null;
@@ -38,6 +39,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const initialRoutingDoneRef = useRef(false); // Track if initial routing decision has been made
   const previousSessionRef = useRef<AuthSession | null>(null); // Track previous session state for sign-in detection
   const syncFamilyTreeDoneRef = useRef<string | null>(null); // Track if syncFamilyTree has been called for current session
+  
+  // Get Statsig client - StatsigProvider is above AuthProvider, so client is always available
+  const { client: statsigClient } = useStatsigClient();
 
   // Initialize auth state
   useEffect(() => {
@@ -71,8 +75,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initializeAuth();
 
     // Subscribe to auth state changes
-    unsubscribeRef.current = authService.current.onAuthStateChanged((newSession) => {
+    unsubscribeRef.current = authService.current.onAuthStateChanged(async (newSession) => {
       if (mounted) {
+        // PRO APPROACH: Sync Statsig identity when session changes
+        // StatsigProvider is above AuthProvider, so Statsig is always initialized
+        // We can safely call client.updateUserAsync() to promote/demote user identity
+        try {
+          if (newSession?.user && statsigClient) {
+            // PROMOTE guest to real user
+            await statsigClient.updateUserAsync({
+              userID: newSession.user.id,
+              email: newSession.user.email,
+            });
+            
+            if (__DEV__) {
+              console.log('[AuthContext] Promoted Statsig user to authenticated');
+            }
+            
+            // Log sign-in event immediately after user update
+            statsigClient.logEvent('user_signs_in', 'google', {
+              timestamp: new Date().toISOString(),
+            });
+            
+            // CRITICAL: Force flush to ensure event is sent immediately
+            // This is important for sign-in events that we want to track right away
+            await statsigClient.flush();
+            
+            if (__DEV__) {
+              console.log('[AuthContext] Logged user_signs_in event to Statsig and flushed');
+            }
+          } else if (!newSession && statsigClient) {
+            // DEMOTE back to guest on logout
+            await statsigClient.updateUserAsync({ userID: '' });
+            
+            if (__DEV__) {
+              console.log('[AuthContext] Demoted Statsig user to guest');
+            }
+          }
+        } catch (statsigError: any) {
+          // Statsig error - log but don't block auth flow
+          if (__DEV__) {
+            console.warn('[AuthContext] Could not update Statsig user:', statsigError);
+          }
+        }
+        
         // CRITICAL FIX #1: Reset routing flag when session becomes truthy (sign-in)
         // This ensures profile check always has permission to redirect after sign-in
         // Use ref to track previous session (callback closure may have stale state)
@@ -91,7 +137,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             // Different user logged in - reset sync ref so it syncs for the new user
             syncFamilyTreeDoneRef.current = null;
             if (__DEV__) {
-              console.log('[AuthContext] Different user logged in, resetting sync ref', { previousUserId, newUserId });
+              // SECURITY: Don't log actual user IDs - just indicate a change occurred
+              console.log('[AuthContext] Different user logged in, resetting sync ref');
             }
           }
         }
@@ -119,9 +166,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         unsubscribeRef.current();
       }
     };
-  }, []);
+  }, [statsigClient]); // Include statsigClient in dependencies
 
   // Check user profile after authentication (handles race conditions)
+  // CRITICAL: Use session?.user?.id instead of entire session object to prevent unnecessary re-runs
+  // Only depend on user ID and loading state, not the entire session object
   useEffect(() => {
     // Wait for auth to complete before checking profile
     if (isLoading || !session) {
@@ -130,6 +179,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Prevent multiple simultaneous profile checks
     if (isCheckingProfile || profileCheckRef.current) {
+      return;
+    }
+
+    // CRITICAL: Track if we've already executed for this user ID to prevent duplicate execution
+    // This handles React 19 development mode double-execution
+    const currentUserId = session.user.id;
+    if (syncFamilyTreeDoneRef.current === currentUserId && profileCheckRef.current) {
+      // Already executed for this user - skip
+      if (__DEV__) {
+        console.log('[AuthContext] Profile check already executed for this user, skipping');
+      }
       return;
     }
 
@@ -146,7 +206,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // CRITICAL: Sync entire family tree from backend ONCE per session (loads all people and relationships)
           // This ensures relationships are loaded even if we only have ego profile initially
           // Use ref to prevent multiple syncs if useEffect runs again
-          const currentUserId = session.user.id;
           if (syncFamilyTreeDoneRef.current !== currentUserId) {
             syncFamilyTreeDoneRef.current = currentUserId;
             if (__DEV__) {
@@ -154,7 +213,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
             try {
               await useFamilyTreeStore.getState().syncFamilyTree(currentUserId);
-              console.log('[DEBUG] AuthContext: Family tree synced successfully');
+              if (__DEV__) {
+                console.log('[AuthContext] Family tree synced successfully');
+              }
             } catch (error: any) {
               console.error('[AuthContext] Error syncing family tree', error);
               // Reset ref on error so it can retry on next check
@@ -171,7 +232,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!initialRoutingDoneRef.current) {
             initialRoutingDoneRef.current = true;
             // Verify ego belongs to current user
-            const currentUserId = session.user.id;
             const egoId = profile.id;
             const isEgoForCurrentUser = !!(egoId && egoId === currentUserId) || !!(profile.createdBy && profile.createdBy === currentUserId);
             
@@ -214,9 +274,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     profileCheckRef.current = checkProfile();
-    // NOTE: Removed isCheckingProfile from dependencies - it's only used as a guard, not a trigger
-    // This prevents the effect from re-running when isCheckingProfile changes
-  }, [session, isLoading]);
+    // NOTE: Use session?.user?.id instead of entire session object to prevent unnecessary re-runs
+    // Only re-run when user ID changes or loading state changes
+  }, [session?.user?.id, isLoading]);
 
   // Routing guard: ONLY protects tabs access (security) and handles unauthenticated users
   // Initial routing decision is made in profile check useEffect (runs once)
