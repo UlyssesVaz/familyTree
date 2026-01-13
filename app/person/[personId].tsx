@@ -17,6 +17,8 @@ import { AddUpdateModal } from '@/components/family-tree';
 import { useAuth } from '@/contexts/auth-context';
 import { createInvitationLink } from '@/services/supabase/invitations-api';
 import type { Person, Update } from '@/types/family-tree';
+import { useStatsigClient } from '@statsig/expo-bindings';
+import { logStatsigEvent } from '@/utils/statsig-tracking';
 
 export default function PersonProfileModal() {
   const insets = useSafeAreaInsets();
@@ -28,6 +30,7 @@ export default function PersonProfileModal() {
   
   const personId = params.personId;
   const { session } = useAuth();
+  const { client: statsigClient } = useStatsigClient();
   
   const egoId = useFamilyTreeStore((state) => state.egoId);
   const getPerson = useFamilyTreeStore((state) => state.getPerson);
@@ -204,6 +207,11 @@ export default function PersonProfileModal() {
                         // Don't include url parameter - it causes duplication on iOS
                         // The URL is already in the message text
                       });
+                      
+                      // Track event: invite_sent
+                      // Note: React Native Share API doesn't expose method (SMS/Email)
+                      // We can't determine which method was used
+                      logStatsigEvent(statsigClient, 'invite_sent');
                     } catch (error: any) {
                       console.error('[PersonProfile] Error creating invitation:', error);
                       Alert.alert(
@@ -455,6 +463,15 @@ export default function PersonProfileModal() {
             // created_by will be session.user.id (the authenticated user posting)
             // This enables posting updates on anyone's wall, not just the ego user
             addUpdate(personId, title, photoUrl, caption, isPublic, finalTaggedPersonIds, session.user.id);
+            
+            // Track event: update_posted
+            const isOnOtherWall = personId !== egoId;
+            const hasTagging = finalTaggedPersonIds.length > 0;
+            logStatsigEvent(statsigClient, 'update_posted', undefined, {
+              isOnOtherWall,
+              hasTagging,
+              taggedCount: finalTaggedPersonIds.length,
+            });
             
             // Close modal - update will appear on this person's profile automatically
             setIsAddingUpdate(false);

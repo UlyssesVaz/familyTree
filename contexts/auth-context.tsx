@@ -85,7 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             // PROMOTE guest to real user
             await statsigClient.updateUserAsync({
               userID: newSession.user.id,
-              email: newSession.user.email,
+              email: newSession.user.email ?? undefined,
             });
             
             if (__DEV__) {
@@ -370,6 +370,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     try {
       setError(null);
+      
+      // Track logout event BEFORE clearing session
+      if (statsigClient) {
+        try {
+          statsigClient.logEvent('logout');
+          await statsigClient.flush();
+          if (__DEV__) {
+            console.log('[AuthContext] Logged logout event to Statsig');
+          }
+        } catch (statsigError: any) {
+          if (__DEV__) {
+            console.warn('[AuthContext] Could not log logout event:', statsigError);
+          }
+        }
+      }
       
       // Clear local state FIRST (before sign out completes)
       // This prevents any race conditions where auth state listener might restore session

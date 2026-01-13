@@ -15,6 +15,8 @@ import { useFamilyTreeStore } from '@/stores/family-tree-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { useAuth } from '@/contexts/auth-context';
 import type { Update, Person } from '@/types/family-tree';
+import { useStatsigClient } from '@statsig/expo-bindings';
+import { logStatsigEvent } from '@/utils/statsig-tracking';
 
 export default function FamilyScreen() {
   const insets = useSafeAreaInsets();
@@ -23,6 +25,7 @@ export default function FamilyScreen() {
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
   const { session } = useAuth();
+  const { client: statsigClient } = useStatsigClient();
   
   const ego = useFamilyTreeStore((state) => state.getEgo());
   const egoId = useFamilyTreeStore((state) => state.egoId);
@@ -320,11 +323,32 @@ export default function FamilyScreen() {
             // Post update on ego's wall (ego.id = user_id in updates table)
             // created_by will be session.user.id (the authenticated user posting)
             await addUpdate(ego.id, title, photoUrl, caption, isPublic, taggedPersonIds, session.user.id);
+            
+            // Track event: update_posted
+            logStatsigEvent(statsigClient, 'update_posted', undefined, {
+              isOnOtherWall: false,
+              hasTagging: (taggedPersonIds?.length ?? 0) > 0,
+              taggedCount: taggedPersonIds?.length ?? 0,
+            });
+            
             setIsAddingUpdate(false);
             setUpdateToEdit(null);
           }}
           onEdit={(updateId, title, photoUrl, caption, isPublic, taggedPersonIds) => {
             updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+            
+            // Track event: wall_entry_updated
+            const update = useFamilyTreeStore.getState().updates.get(updateId);
+            const egoId = useFamilyTreeStore.getState().egoId;
+            const isOnOtherWall = update?.personId !== egoId;
+            const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
+            
+            logStatsigEvent(statsigClient, 'wall_entry_updated', undefined, {
+              isOnOtherWall,
+              hasTagging,
+              taggedCount: taggedPersonIds?.length ?? 0,
+            });
+            
             setIsAddingUpdate(false);
             setUpdateToEdit(null);
           }}

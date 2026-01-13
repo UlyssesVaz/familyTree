@@ -21,6 +21,8 @@ import { locationService, LocationData } from '@/services/location-service';
 import { uploadImage, STORAGE_BUCKETS } from '@/services/supabase/storage-api';
 import { updateEgoProfile } from '@/services/supabase/people-api';
 import type { Update, Person } from '@/types/family-tree';
+import { useStatsigClient } from '@statsig/expo-bindings';
+import { logStatsigEvent } from '@/utils/statsig-tracking';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -36,6 +38,7 @@ export default function ProfileScreen() {
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
   const { signOut, session } = useAuth();
+  const { client: statsigClient } = useStatsigClient();
   
   const ego = useFamilyTreeStore((state) => state.getEgo());
   const egoId = useFamilyTreeStore((state) => state.egoId);
@@ -735,12 +738,31 @@ export default function ProfileScreen() {
             onAdd={async (title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
               if (egoId && session?.user?.id) {
                 await addUpdate(egoId, title, photoUrl, caption, isPublic, taggedPersonIds, session.user.id);
+                
+                // Track event: update_posted
+                logStatsigEvent(statsigClient, 'update_posted', undefined, {
+                  isOnOtherWall: false,
+                  hasTagging: (taggedPersonIds?.length ?? 0) > 0,
+                  taggedCount: taggedPersonIds?.length ?? 0,
+                });
               } else {
                 console.error('[Profile] Cannot add update: Missing egoId or session');
               }
             }}
             onEdit={(updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
               updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+              
+              // Track event: wall_entry_updated
+              const update = useFamilyTreeStore.getState().updates.get(updateId);
+              const currentEgoId = useFamilyTreeStore.getState().egoId;
+              const isOnOtherWall = update?.personId !== currentEgoId;
+              const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
+              
+              logStatsigEvent(statsigClient, 'wall_entry_updated', undefined, {
+                isOnOtherWall,
+                hasTagging,
+                taggedCount: taggedPersonIds?.length ?? 0,
+              });
             }}
           />
         </>

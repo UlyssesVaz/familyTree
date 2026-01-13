@@ -8,7 +8,8 @@ if (Platform.OS !== 'web') {
   require('react-native-get-random-values');
 }
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -22,6 +23,7 @@ import { ErrorProvider } from '@/contexts/error-context';
 import { ModalProvider } from '@/contexts/modal-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { StatsigProvider } from '@/components/StatsigProvider';
+import { useStatsigClient } from '@statsig/expo-bindings';
 
 // Supabase will be initialized when auth service is first used
 // No initialization needed here - Supabase client initializes lazily
@@ -30,6 +32,34 @@ import { StatsigProvider } from '@/components/StatsigProvider';
 
 function RootLayoutNav() {
   const { colorScheme } = useColorSchemeContext();
+  const { client: statsigClient } = useStatsigClient();
+  const appState = useRef(AppState.currentState);
+
+  // Monitor AppState for session tracking
+  // Statsig automatically calculates session duration based on events
+  // We just need to ensure events are logged so Statsig can track sessions
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        // App came to foreground - session continues
+        if (statsigClient && __DEV__) {
+          console.log('[Statsig] App came to foreground - session continues');
+        }
+      } else if (appState.current === 'active' && nextAppState.match(/inactive|background/)) {
+        // App went to background
+        // Statsig automatically handles session duration based on events
+        // We don't need to manually log "app closed" - Statsig calculates it
+        if (statsigClient && __DEV__) {
+          console.log('[Statsig] App went to background - session will end when app closes');
+        }
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [statsigClient]);
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>

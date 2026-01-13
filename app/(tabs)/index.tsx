@@ -4,6 +4,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/auth-context';
 import { createInvitationLink } from '@/services/supabase/invitations-api';
+import { useStatsigClient } from '@statsig/expo-bindings';
+import { logStatsigEvent } from '@/utils/statsig-tracking';
 
 import {
   PersonCard,
@@ -176,6 +178,7 @@ export default function HomeScreen() {
   const { session } = useAuth();
   const userId = session?.user?.id;
   const egoId = useFamilyTreeStore((state) => state.egoId);
+  const { client: statsigClient } = useStatsigClient();
   
   // Use the custom hook to get all tree layout calculations
   // This hook encapsulates all the complex tree traversal logic
@@ -267,6 +270,9 @@ export default function HomeScreen() {
       // Create the new person (await async call and pass userId)
       const newPersonId = await addPerson(data, userId);
 
+      // Track event: relative_added
+      logStatsigEvent(statsigClient, 'relative_added');
+
       // Create the relationship based on type (await async calls and pass userId)
       switch (selectedRelativeType) {
         case 'parent':
@@ -321,6 +327,11 @@ export default function HomeScreen() {
                         // Don't include url parameter - it causes duplication on iOS
                         // The URL is already in the message text
                       });
+                      
+                      // Track event: invite_sent
+                      // Note: React Native Share API doesn't expose method (SMS/Email)
+                      // We can't determine which method was used
+                      logStatsigEvent(statsigClient, 'invite_sent');
                     }, 300);
                   } catch (error) {
                     console.error('Error sharing invite:', error);
