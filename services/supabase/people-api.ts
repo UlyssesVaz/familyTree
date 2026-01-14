@@ -7,31 +7,10 @@
 
 import { getSupabaseClient } from './supabase-init';
 import type { Person, Gender } from '@/types/family-tree';
-import { uploadImage, STORAGE_BUCKETS } from './storage-api';
+import { STORAGE_BUCKETS } from './storage-api';
 import { handleSupabaseQuery, handleSupabaseMutation, handleDuplicateKeyError } from '@/utils/supabase-error-handler';
-
-/**
- * Database row type for people table
- * Maps directly to PostgreSQL schema
- * NOTE: updated_by and version columns are optional (may not exist in current schema)
- */
-interface PeopleRow {
-  // NOTE: people table uses user_id as primary key, NOT id
-  user_id: string; // Primary key - NOT NULL
-  name: string;
-  birth_date: string | null;
-  death_date: string | null;
-  gender: 'male' | 'female' | 'other' | null;
-  photo_url: string | null;
-  bio: string | null;
-  phone_number: string | null;
-  created_at: string; // ISO 8601 timestamp
-  updated_at: string; // ISO 8601 timestamp
-  created_by: string | null;
-  updated_by?: string | null; // Optional - may not exist in schema
-  version?: number; // Optional - may not exist in schema
-  linked_auth_user_id?: string | null; // Links to auth.users.id - distinguishes Living vs Ancestor profiles
-}
+import { uploadPhotoIfLocal } from './shared/photo-upload';
+import { mapPersonRow, type PeopleRow } from './shared/mappers';
 
 /**
  * Input type for creating a new person profile
@@ -73,37 +52,8 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
     return null;
   }
   
-  // Explicitly map every database field to Person type
-  // Handle optional columns gracefully
-  // CRITICAL: Database uses user_id as primary key (NOT id)
-  if (!data.user_id) {
-    console.error('[People API] No user_id found in database response:', data);
-    throw new Error('Database response missing user_id');
-  }
-  
-  const person: Person = {
-    id: data.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
-    name: data.name,
-    birthDate: data.birth_date || undefined,
-    deathDate: data.death_date || undefined,
-    gender: (data.gender as Gender) || undefined,
-    photoUrl: data.photo_url || undefined,
-    bio: data.bio || undefined,
-    phoneNumber: data.phone_number || undefined,
-    parentIds: [], // Will be loaded from relationships table later
-    spouseIds: [], // Will be loaded from relationships table later
-    childIds: [], // Will be loaded from relationships table later
-    siblingIds: [], // Will be loaded from relationships table later
-    createdAt: new Date(result.created_at).getTime(),
-    updatedAt: new Date(result.updated_at).getTime(),
-    createdBy: result.created_by || undefined,
-    updatedBy: (result as any).updated_by || undefined, // Optional column
-    version: (result as any).version || 1, // Optional column, default to 1
-    hiddenTaggedUpdateIds: undefined, // Will be loaded later if needed
-    linkedAuthUserId: result.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
-  };
-  
-  return person;
+  // Map database row to Person type using shared mapper
+  return mapPersonRow(result);
 }
 
 /**
@@ -132,30 +82,12 @@ export async function createEgoProfile(
   
   // STEP 1: Upload photo to Supabase Storage if it's a local file URI
   // This must complete BEFORE we save to database
-  let photoUrl = input.photoUrl;
-  
-  if (photoUrl?.startsWith('file://')) {
-    try {
-      // Upload local file to Supabase Storage
-      const uploadedUrl = await uploadImage(
-        photoUrl,
-        STORAGE_BUCKETS.PERSON_PHOTOS,
-        `profiles/${userId}` // Organize by user ID
-      );
-      
-      if (uploadedUrl) {
-        photoUrl = uploadedUrl; // Use uploaded URL instead of local URI
-      } else {
-        console.warn('[People API] Photo upload returned null, continuing without photo');
-        photoUrl = undefined;
-      }
-    } catch (error: any) {
-      console.error('[People API] Error uploading photo:', error);
-      // Don't fail the entire profile creation if photo upload fails
-      // Continue without photo - user can add it later
-      photoUrl = undefined;
-    }
-  }
+  const photoUrl = await uploadPhotoIfLocal(
+    input.photoUrl,
+    STORAGE_BUCKETS.PERSON_PHOTOS,
+    `profiles/${userId}`,
+    'People API'
+  ) ?? undefined; // Convert null to undefined for consistency
   
   // STEP 2: Prepare database row (map TypeScript types to PostgreSQL schema)
   // NOTE: user_id is now DB-generated (gen_random_uuid()), not manually set
@@ -206,37 +138,8 @@ export async function createEgoProfile(
     throw err;
   }
   
-  // STEP 4: Map database response to Person type
-  // Explicitly map every database field to Person type
-  // CRITICAL: Database uses user_id as primary key (NOT id)
-  if (!result.user_id) {
-    console.error('[People API] No user_id found in create response:', result);
-    throw new Error('Database response missing user_id');
-  }
-  
-  const person: Person = {
-    id: result.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
-    name: result.name,
-    birthDate: result.birth_date || undefined,
-    deathDate: result.death_date || undefined,
-    gender: (result.gender as Gender) || undefined,
-    photoUrl: result.photo_url || undefined,
-    bio: result.bio || undefined,
-    phoneNumber: result.phone_number || undefined,
-    parentIds: [], // New profile has no relationships yet
-    spouseIds: [],
-    childIds: [],
-    siblingIds: [],
-    createdAt: new Date(result.created_at).getTime(),
-    updatedAt: new Date(result.updated_at).getTime(),
-    createdBy: result.created_by || undefined,
-    updatedBy: (result as any).updated_by || undefined, // Optional column
-    version: (result as any).version || 1, // Optional column, default to 1
-    hiddenTaggedUpdateIds: undefined,
-    linkedAuthUserId: result.linked_auth_user_id || undefined, // Living profile if set, Ancestor if null
-  };
-  
-  return person;
+  // STEP 4: Map database response to Person type using shared mapper
+  return mapPersonRow(result);
 }
 
 /**
@@ -273,31 +176,12 @@ export async function updateEgoProfile(
   
   // STEP 1: Upload photo to Supabase Storage if it's a local file URI
   // This must complete BEFORE we save to database
-  let photoUrl = updates.photoUrl;
-  
-  if (photoUrl?.startsWith('file://')) {
-    try {
-      // Upload local file to Supabase Storage
-      const uploadedUrl = await uploadImage(
-        photoUrl,
-        STORAGE_BUCKETS.PERSON_PHOTOS,
-        `profiles/${userId}` // Organize by user ID
-      );
-      
-      if (uploadedUrl) {
-        photoUrl = uploadedUrl; // Use uploaded URL instead of local URI
-      } else {
-        console.warn('[People API] Photo upload returned null, keeping existing photo');
-        // Don't update photo_url if upload failed - keep existing
-        photoUrl = undefined;
-      }
-    } catch (error: any) {
-      console.error('[People API] Error uploading photo:', error);
-      // Don't fail the entire update if photo upload fails
-      // Keep existing photo - user can try again
-      photoUrl = undefined;
-    }
-  }
+  const photoUrl = await uploadPhotoIfLocal(
+    updates.photoUrl,
+    STORAGE_BUCKETS.PERSON_PHOTOS,
+    `profiles/${userId}`,
+    'People API'
+  ) ?? undefined; // Convert null to undefined for consistency
   
   // STEP 2: Prepare update object (only include fields that are being updated)
   // Map TypeScript types to PostgreSQL schema
@@ -346,36 +230,9 @@ export async function updateEgoProfile(
     operation: 'update ego profile',
   });
   
-  // STEP 4: Map database response to Person type
-  // CRITICAL: Database uses user_id as primary key (NOT id)
-  if (!result.user_id) {
-    console.error('[People API] No user_id found in update response:', result);
-    throw new Error('Database response missing user_id');
-  }
-  
-  const person: Person = {
-    id: result.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
-    name: data.name,
-    birthDate: data.birth_date || undefined,
-    deathDate: data.death_date || undefined,
-    gender: (data.gender as Gender) || undefined,
-    photoUrl: data.photo_url || undefined,
-    bio: data.bio || undefined,
-    phoneNumber: data.phone_number || undefined,
-    parentIds: existingProfile.parentIds, // Keep existing relationships
-    spouseIds: existingProfile.spouseIds,
-    childIds: existingProfile.childIds,
-    siblingIds: existingProfile.siblingIds,
-    createdAt: existingProfile.createdAt, // Keep original creation time
-    updatedAt: new Date(data.updated_at).getTime(), // Use new updated_at from database
-    createdBy: data.created_by || undefined,
-    updatedBy: (data as any).updated_by || undefined, // Optional column
-    version: ((data as any).version || existingProfile.version) + 1, // Increment version if column exists
-    hiddenTaggedUpdateIds: existingProfile.hiddenTaggedUpdateIds, // Keep existing hidden updates
-    linkedAuthUserId: data.linked_auth_user_id || existingProfile.linkedAuthUserId || undefined, // Preserve linked auth user ID
-  };
-  
-  return person;
+  // STEP 4: Map database response to Person type using shared mapper
+  // Preserve existing profile relationships and metadata
+  return mapPersonRow(result, undefined, existingProfile);
 }
 
 /**
@@ -398,27 +255,12 @@ export async function createRelative(
   const supabase = getSupabaseClient();
   
   // STEP 1: Upload photo to Supabase Storage if it's a local file URI
-  let photoUrl: string | null = input.photoUrl || null;
-  
-  if (photoUrl?.startsWith('file://')) {
-    try {
-      const uploadedUrl = await uploadImage(
-        photoUrl,
-        STORAGE_BUCKETS.PERSON_PHOTOS,
-        `relatives/${userId}` // Organize by creator
-      );
-      
-      if (uploadedUrl) {
-        photoUrl = uploadedUrl;
-      } else {
-        console.warn('[People API] Photo upload returned null, continuing without photo');
-        photoUrl = null;
-      }
-    } catch (error: any) {
-      console.error('[People API] Error uploading photo:', error);
-      photoUrl = null;
-    }
-  }
+  const photoUrl = await uploadPhotoIfLocal(
+    input.photoUrl,
+    STORAGE_BUCKETS.PERSON_PHOTOS,
+    `relatives/${userId}`,
+    'People API'
+  ); // Keep as null (not undefined) for createRelative
   
   // STEP 2: Prepare database row
   // NOTE: user_id is now DB-generated (gen_random_uuid()), not manually set
@@ -451,35 +293,8 @@ export async function createRelative(
     operation: 'create relative',
   });
   
-  // STEP 5: Map database response to Person type
-  // NOTE: Database uses user_id as primary key (NOT id)
-  if (!result.user_id) {
-    throw new Error('Database response missing user_id');
-  }
-  
-  const person: Person = {
-    id: result.user_id, // Use user_id as the Person.id (frontend uses 'id' for consistency)
-    name: result.name,
-    birthDate: result.birth_date || undefined,
-    deathDate: result.death_date || undefined,
-    gender: (result.gender as Gender) || undefined,
-    photoUrl: result.photo_url || undefined,
-    bio: result.bio || undefined,
-    phoneNumber: result.phone_number || undefined,
-    parentIds: [], // New relative has no relationships yet
-    spouseIds: [],
-    childIds: [],
-    siblingIds: [],
-    createdAt: new Date(result.created_at).getTime(),
-    updatedAt: new Date(result.updated_at).getTime(),
-    createdBy: result.created_by || undefined,
-    updatedBy: (result as any).updated_by || undefined,
-    version: (result as any).version || 1,
-    hiddenTaggedUpdateIds: undefined,
-    linkedAuthUserId: result.linked_auth_user_id || undefined, // Should be null/undefined for relatives
-  };
-  
-  return person;
+  // STEP 5: Map database response to Person type using shared mapper
+  return mapPersonRow(result);
 }
 
 /**
@@ -597,34 +412,18 @@ export async function getAllPeople(): Promise<Person[]> {
     }
   }
   
-  // STEP 4: Map database rows to Person objects with relationships
-  // CRITICAL: Database uses user_id as primary key (NOT id)
+  // STEP 4: Map database rows to Person objects with relationships using shared mapper
   const people: Person[] = peopleData
     .filter((row) => row.user_id != null) // Filter out rows without user_id
     .map((row) => {
       const personId = row.user_id!; // We know it's not null from filter above
       
-      return {
-        id: personId, // Use user_id as Person.id (frontend uses 'id' for consistency)
-        name: row.name,
-        birthDate: row.birth_date || undefined,
-        deathDate: row.death_date || undefined,
-        gender: (row.gender as Gender) || undefined,
-        photoUrl: row.photo_url || undefined,
-        bio: row.bio || undefined,
-        phoneNumber: row.phone_number || undefined,
+      return mapPersonRow(row, {
         parentIds: parentMap.get(personId) || [],
         spouseIds: spouseMap.get(personId) || [],
         childIds: childMap.get(personId) || [],
         siblingIds: siblingMap.get(personId) || [],
-        createdAt: new Date(row.created_at).getTime(),
-        updatedAt: new Date(row.updated_at).getTime(),
-        createdBy: row.created_by || undefined,
-        updatedBy: (row as any).updated_by || undefined,
-        version: (row as any).version || 1,
-        hiddenTaggedUpdateIds: undefined, // Will be loaded from updates if needed
-        linkedAuthUserId: row.linked_auth_user_id || undefined,
-      };
+      });
     });
   return people;
 }

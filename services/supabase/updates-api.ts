@@ -7,27 +7,13 @@
 
 import { getSupabaseClient } from './supabase-init';
 import type { Update } from '@/types/family-tree';
-import { uploadImage, deleteImage, STORAGE_BUCKETS } from './storage-api';
+import { deleteImage, STORAGE_BUCKETS } from './storage-api';
 import { v4 as uuidv4 } from 'uuid';
 import { handleSupabaseMutation } from '@/utils/supabase-error-handler';
+import { uploadPhotoIfLocal } from './shared/photo-upload';
+import { mapUpdateRow, type UpdatesRow } from './shared/mappers';
 
-/**
- * Database row type for updates table
- * Maps directly to PostgreSQL schema
- * NOTE: PRIMARY KEY is now updates_id (UUID)
- */
-interface UpdatesRow {
-  updates_id: string; // PRIMARY KEY (UUID)
-  user_id: string; // FOREIGN KEY to people.user_id (the person whose wall this update is on)
-  created_by: string; // FOREIGN KEY to auth.users.id (the user who created this update)
-  title: string;
-  photo_url: string | null;
-  caption: string | null;
-  is_public: boolean;
-  created_at: string; // ISO 8601 timestamp
-  updated_at: string; // ISO 8601 timestamp
-  deleted_at?: string | null; // ISO 8601 timestamp for soft delete
-}
+// UpdatesRow type is now imported from shared/mappers
 
 /**
  * Database row type for update_tags table
@@ -81,32 +67,12 @@ export async function createUpdate(
   
   // STEP 1: Upload photo to Supabase Storage if it's a local file URI
   // This must complete BEFORE we save to database
-  let photoUrl: string | null = input.photoUrl || null;
-  
-  if (photoUrl && photoUrl.startsWith('file://')) {
-    try {
-      // Upload local file to Supabase Storage
-      // Folder structure: update-photos/{authenticatedUserId}/uuid.jpg
-      // Organized by creator - uploadImage generates unique filenames to prevent collisions
-      const uploadedUrl = await uploadImage(
-        photoUrl,
-        STORAGE_BUCKETS.UPDATE_PHOTOS,
-        authenticatedUserId // Single folder level: organize by creator only
-      );
-      
-      if (uploadedUrl) {
-        photoUrl = uploadedUrl; // Use uploaded URL instead of local URI
-      } else {
-        console.warn('[Updates API] Photo upload returned null, continuing without photo');
-        photoUrl = null;
-      }
-    } catch (error: any) {
-      console.error('[Updates API] Error uploading photo:', error);
-      // Don't fail the entire update creation if photo upload fails
-      // Continue without photo - user can try again
-      photoUrl = null;
-    }
-  }
+  const photoUrl = await uploadPhotoIfLocal(
+    input.photoUrl,
+    STORAGE_BUCKETS.UPDATE_PHOTOS,
+    authenticatedUserId, // Single folder level: organize by creator only
+    'Updates API'
+  );
   
   // STEP 2: Generate UUID for the new update
   // With UUID primary key, users can post multiple times to the same wall
@@ -160,22 +126,8 @@ export async function createUpdate(
     }
   }
   
-  // STEP 6: Map database response to Update type
-  const update: Update = {
-    id: updatesId, // UUID primary key
-    personId: result.user_id, // The person this update belongs to
-    title: result.title,
-    photoUrl: result.photo_url || '', // Required field, use empty string if null
-    caption: result.caption || undefined,
-    isPublic: result.is_public,
-    taggedPersonIds: input.taggedPersonIds && input.taggedPersonIds.length > 0 
-      ? input.taggedPersonIds 
-      : undefined,
-    createdAt: new Date(result.created_at).getTime(),
-    createdBy: result.created_by, // The user who created this update
-  };
-  
-  return update;
+  // STEP 6: Map database response to Update type using shared mapper
+  return mapUpdateRow(result, input.taggedPersonIds);
 }
 
 /**
@@ -231,20 +183,9 @@ export async function getUpdatesForPerson(personId: string): Promise<Update[]> {
     }
   }
   
-  // Map database rows to Update type
+  // Map database rows to Update type using shared mapper
   const updates: Update[] = updatesData.map((row) => {
-    return {
-      id: row.updates_id, // UUID primary key
-      personId: row.user_id, // The person this update belongs to
-      title: row.title,
-      photoUrl: row.photo_url || '', // Required field, use empty string if null
-      caption: row.caption || undefined,
-      isPublic: row.is_public,
-      taggedPersonIds: tagsMap.get(row.updates_id) || undefined,
-      createdAt: new Date(row.created_at).getTime(),
-      createdBy: row.created_by, // The user who created this update
-      deletedAt: undefined, // deleted_at column doesn't exist in current schema
-    };
+    return mapUpdateRow(row, tagsMap.get(row.updates_id));
   });
   
   return updates;
@@ -301,20 +242,9 @@ export async function getAllUpdates(): Promise<Update[]> {
     }
   }
   
-  // Map database rows to Update type
+  // Map database rows to Update type using shared mapper
   const updates: Update[] = updatesData.map((row) => {
-    return {
-      id: row.updates_id, // UUID primary key
-      personId: row.user_id, // The person this update belongs to
-      title: row.title,
-      photoUrl: row.photo_url || '', // Required field, use empty string if null
-      caption: row.caption || undefined,
-      isPublic: row.is_public,
-      taggedPersonIds: tagsMap.get(row.updates_id) || undefined,
-      createdAt: new Date(row.created_at).getTime(),
-      createdBy: row.created_by, // The user who created this update
-      deletedAt: undefined, // deleted_at column doesn't exist in current schema
-    };
+    return mapUpdateRow(row, tagsMap.get(row.updates_id));
   });
   
   return updates;
