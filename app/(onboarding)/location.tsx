@@ -16,7 +16,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { locationService, LocationData } from '@/services/location-service';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { useSessionStore } from '@/stores/session-store';
 
 export default function LocationSetupScreen() {
   const colorScheme = useColorScheme();
@@ -24,7 +24,7 @@ export default function LocationSetupScreen() {
   const colors = Colors[theme];
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const updateEgo = useFamilyTreeStore((state) => state.updateEgo);
+  const updateEgo = useSessionStore((state) => state.updateEgo);
   const [location, setLocation] = useState<LocationData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
@@ -52,7 +52,7 @@ export default function LocationSetupScreen() {
   const handleContinue = () => {
     // Save location to bio or separate field (for now, add to bio)
     if (location?.formattedAddress) {
-      const ego = useFamilyTreeStore.getState().getEgo();
+      const ego = useSessionStore.getState().getEgo();
       const currentBio = ego?.bio || '';
       const locationText = `📍 ${location.formattedAddress}`;
       const newBio = currentBio ? `${currentBio}\n\n${locationText}` : locationText;

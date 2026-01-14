@@ -10,7 +10,10 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useProfileUpdates } from '@/hooks/use-profile-updates';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useRelationshipsStore } from '@/stores/relationships-store';
+import { useUpdatesStore } from '@/stores/updates-store';
+import { useSessionStore } from '@/stores/session-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { AddUpdateModal } from '@/components/family-tree';
@@ -32,13 +35,13 @@ export default function PersonProfileModal() {
   const { session } = useAuth();
   const { client: statsigClient } = useStatsigClient();
   
-  const egoId = useFamilyTreeStore((state) => state.egoId);
-  const getPerson = useFamilyTreeStore((state) => state.getPerson);
-  const countAncestors = useFamilyTreeStore((state) => state.countAncestors);
-  const countDescendants = useFamilyTreeStore((state) => state.countDescendants);
-  const toggleTaggedUpdateVisibility = useFamilyTreeStore((state) => state.toggleTaggedUpdateVisibility);
-  const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
-  const people = useFamilyTreeStore((state) => state.people);
+  const egoId = useSessionStore((state) => state.egoId);
+  const getPerson = usePeopleStore((state) => state.getPerson);
+  const countAncestors = useRelationshipsStore((state) => state.countAncestors);
+  const countDescendants = useRelationshipsStore((state) => state.countDescendants);
+  const toggleTaggedUpdateVisibility = useUpdatesStore((state) => state.toggleTaggedUpdateVisibility);
+  const addUpdate = useUpdatesStore((state) => state.addUpdate);
+  const people = usePeopleStore((state) => state.people);
   const peopleArray = Array.from(people.values());
   
   // Use custom hook to get updates for this person (must be called after personId is defined)
@@ -52,9 +55,9 @@ export default function PersonProfileModal() {
   const [isAddingUpdate, setIsAddingUpdate] = useState(false);
 
   // Use ref to avoid stale closure in useEffect
-  const deleteUpdateRef = useRef(useFamilyTreeStore.getState().deleteUpdate);
+  const deleteUpdateRef = useRef(useUpdatesStore.getState().deleteUpdate);
   useEffect(() => {
-    deleteUpdateRef.current = useFamilyTreeStore.getState().deleteUpdate;
+    deleteUpdateRef.current = useUpdatesStore.getState().deleteUpdate;
   }, []);
 
   // Check if we should open Add Update modal from navigation params (for Add Story feature)

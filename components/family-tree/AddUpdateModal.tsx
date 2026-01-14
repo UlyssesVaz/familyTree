@@ -8,7 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
 import { parseMentions, getMentionString } from '@/utils/mentions';
 import type { Update, Person } from '@/types/family-tree';
 
@@ -41,7 +41,7 @@ export function AddUpdateModal({ visible, onClose, onAdd, updateToEdit, onEdit, 
   const colors = Colors[theme];
 
   const isEditMode = !!updateToEdit;
-  const people = useFamilyTreeStore((state) => state.people);
+  const people = usePeopleStore((state) => state.people);
   const peopleArray = Array.from(people.values()).filter(
     (person) => person.id !== personId // Exclude owner from mentions
   );

@@ -15,7 +15,8 @@
  */
 
 import { useMemo } from 'react';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useUpdatesStore } from '@/stores/updates-store';
 import type { Update } from '@/types/family-tree';
 
 export interface UseProfileUpdatesResult {
@@ -42,14 +43,14 @@ export interface UseProfileUpdatesResult {
 export function useProfileUpdates(personId: string | null | undefined): UseProfileUpdatesResult {
   // Subscribe to updates Map directly - Zustand will detect when Map reference changes
   // This includes when updates are added, removed, or modified (like soft-delete)
-  const updatesMap = useFamilyTreeStore((state) => state.updates);
+  const updatesMap = useUpdatesStore((state) => state.updates);
   
   // Subscribe to updates Map size as a fallback trigger
-  const updatesMapSize = useFamilyTreeStore((state) => state.updates.size);
+  const updatesMapSize = useUpdatesStore((state) => state.updates.size);
   
   // Subscribe to a serialized version that includes update metadata to detect value changes
   // This ensures we detect soft-deletes (where size doesn't change but values do)
-  const updatesHash = useFamilyTreeStore((state) => {
+  const updatesHash = useUpdatesStore((state) => {
     const updates = Array.from(state.updates.values());
     // Create a hash that includes update IDs and their deletedAt status
     // This will change when an update is soft-deleted (deletedAt changes)
@@ -65,7 +66,7 @@ export function useProfileUpdates(personId: string | null | undefined): UseProfi
     }
     // Call getUpdatesForPerson directly from store state to ensure we get fresh data
     // Using getState() ensures we always read the latest state, not a stale closure
-    const state = useFamilyTreeStore.getState();
+    const state = useUpdatesStore.getState();
     return state.getUpdatesForPerson(personId);
   }, [personId, updatesMap, updatesMapSize, updatesHash]); // All trigger when Map changes
 
@@ -74,19 +75,19 @@ export function useProfileUpdates(personId: string | null | undefined): UseProfi
     if (!personId) {
       return 0;
     }
-    const state = useFamilyTreeStore.getState();
+    const state = useUpdatesStore.getState();
     return state.getUpdateCount(personId);
   }, [personId, updatesMap, updatesMapSize, updatesHash]); // All trigger when Map changes
 
   // Subscribe to people Map size to detect when people are added/removed
-  const peopleMapSize = useFamilyTreeStore((state) => state.people.size);
+  const peopleMapSize = usePeopleStore((state) => state.people.size);
 
   // Check if person exists
   const hasPerson = useMemo(() => {
     if (!personId) {
       return false;
     }
-    const state = useFamilyTreeStore.getState();
+    const state = usePeopleStore.getState();
     return !!state.getPerson(personId);
   }, [personId, peopleMapSize]); // Depend on peopleMapSize to detect when people change
 

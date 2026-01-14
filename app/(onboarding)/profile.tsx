@@ -15,7 +15,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { useSessionStore } from '@/stores/session-store';
 import { ProfileFormFields, ProfileFormData } from '@/components/family-tree/ProfileFormFields';
 import { createEgoProfile } from '@/services/supabase/people-api';
 
@@ -58,7 +58,7 @@ export default function ProfileSetupScreen() {
       });
 
       // Load the created person into Zustand store
-      useFamilyTreeStore.getState().loadEgo(createdPerson);
+      useSessionStore.getState().loadEgo(createdPerson);
       
 
       // Move to next step (only after successful 201 Created response)

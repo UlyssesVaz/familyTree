@@ -4,29 +4,59 @@
 
 This document outlines an incremental refactoring plan to improve separation of concerns, reduce complexity, and prevent race conditions. Each step is designed to be tested independently before moving to the next.
 
+## 🎯 Current Status: 80% Complete
+
+**✅ Completed (4/5 phases):**
+- Phase 1: Shared API Utilities
+- Phase 2: Analytics Context
+- Phase 3: Profile Context
+- Phase 4: Auth Guard
+
+**🔄 Next Phase:**
+- Phase 5: Split Family Tree Store (High Risk)
+
+**📊 Impact:**
+- AuthContext: 452 lines → 172 lines (62% reduction)
+- Created 3 new focused contexts
+- Eliminated code duplication in API layer
+- Clear separation of concerns achieved
+
 ---
 
 ## 🔍 Current State Analysis
 
-### 1. Auth Context Overload (`contexts/auth-context.tsx` - 452 lines)
+### ✅ Completed Refactoring
 
-**Current Responsibilities:**
-- ✅ Session management (lines 29-169)
-- ❌ Statsig user identity sync (lines 80-120) - **Should be separate**
-- ❌ Profile checking/loading (lines 171-279) - **Should be separate**
-- ❌ Family tree syncing (lines 206-229) - **Should be separate**
-- ❌ Routing guards (lines 281-329) - **Could be cleaner**
+**Phase 1: Shared API Utilities** ✅
+- Created `services/supabase/shared/photo-upload.ts`
+- Created `services/supabase/shared/mappers.ts`
+- Refactored `people-api.ts` and `updates-api.ts` to use shared utilities
 
-**Dependencies:**
-- `useFamilyTreeStore` - for ego management and sync
-- `getUserProfile` from `@/services/supabase/people-api`
-- `useStatsigClient` from `@statsig/expo-bindings`
-- `useRouter`, `useSegments` from `expo-router`
+**Phase 2: Analytics Context** ✅
+- Created `contexts/analytics-context.tsx`
+- Moved Statsig identity sync out of AuthContext
+- AuthContext reduced from 452 lines to ~172 lines
 
-**Race Condition Risks:**
-- Multiple profile checks can run simultaneously (guarded by `profileCheckRef`)
-- Sync can be called multiple times (guarded by `syncFamilyTreeDoneRef`)
-- Routing decisions can be made multiple times (guarded by `initialRoutingDoneRef`)
+**Phase 3: Profile Context** ✅
+- Created `contexts/profile-context.tsx`
+- Moved profile checking, family tree sync, and initial routing decisions
+- AuthContext now focuses solely on session management
+
+**Phase 4: Auth Guard** ✅
+- Created `contexts/guards/auth-guard.tsx`
+- Extracted routing guard logic from AuthContext
+- Clean separation of route protection
+
+### Current Architecture
+
+**Contexts:**
+- `auth-context.tsx` (~172 lines) - ✅ Session management only
+- `analytics-context.tsx` - ✅ Statsig identity sync
+- `profile-context.tsx` - ✅ Profile loading, ego management, family tree sync, initial routing
+- `guards/auth-guard.tsx` - ✅ Route protection
+
+**Remaining Work:**
+- Phase 5: Split Family Tree Store (High Risk) - **Next Phase**
 
 ---
 
@@ -107,145 +137,105 @@ services/supabase/
 
 ## 📝 Incremental Refactoring Steps
 
-### Phase 1: Extract Shared API Utilities (Low Risk)
+### Phase 1: Extract Shared API Utilities (Low Risk) ✅ COMPLETE
 
 **Goal:** Remove duplication in API layer without changing behavior.
 
-**Steps:**
-1. Create `services/supabase/shared/photo-upload.ts`
-   - Extract `uploadPhotoIfLocal()` function
-   - Handle `file://` URI detection and upload
-   - Return `string | null`
+**Status:** ✅ Completed
+- Created `services/supabase/shared/photo-upload.ts`
+- Created `services/supabase/shared/mappers.ts`
+- Refactored `people-api.ts` to use shared utilities
+- Refactored `updates-api.ts` to use shared utilities
 
-2. Create `services/supabase/shared/mappers.ts`
-   - Extract `mapPersonRow(row: PeopleRow): Person`
-   - Extract `mapUpdateRow(row: UpdatesRow): Update`
-   - Handle optional fields and type conversions
-
-3. Refactor `people-api.ts`
-   - Replace photo upload logic with `uploadPhotoIfLocal()`
-   - Replace row mapping with `mapPersonRow()`
-   - Test: Create profile, update profile, create relative
-
-4. Refactor `updates-api.ts`
-   - Replace photo upload logic with `uploadPhotoIfLocal()`
-   - Replace row mapping with `mapUpdateRow()`
-   - Test: Create update, fetch updates
-
-**Validation:**
-- ✅ All existing tests pass
-- ✅ No behavior changes
+**Results:**
 - ✅ Photo uploads still work
 - ✅ Data mapping still correct
+- ✅ No behavior changes
+- ✅ Code duplication eliminated
 
 **Risk Level:** Low (pure extraction, no logic changes)
 
 ---
 
-### Phase 2: Extract Analytics Context (Medium Risk)
+### Phase 2: Extract Analytics Context (Medium Risk) ✅ COMPLETE
 
 **Goal:** Move Statsig identity sync out of AuthContext.
 
-**Steps:**
-1. Create `contexts/analytics-context.tsx`
-   - Move Statsig user identity sync logic (lines 80-120 from auth-context)
-   - Subscribe to auth session changes
-   - Handle `updateUserAsync()` and event logging
+**Status:** ✅ Completed
+- Created `contexts/analytics-context.tsx`
+- Moved Statsig user identity sync logic
+- Updated `app/_layout.tsx` to include AnalyticsProvider
+- Removed Statsig logic from AuthContext
 
-2. Update `app/_layout.tsx`
-   - Wrap `AnalyticsProvider` around `AuthProvider`
-   - Ensure StatsigProvider is still above both
-
-3. Update `contexts/auth-context.tsx`
-   - Remove Statsig logic (lines 44, 80-120, 375-387)
-   - Remove `useStatsigClient` import
-   - Keep session management only
-
-4. Test authentication flow
-   - Sign in → verify Statsig user updated
-   - Sign out → verify Statsig user demoted to guest
-   - Check event logging still works
-
-**Validation:**
+**Results:**
 - ✅ Statsig identity sync still works
 - ✅ Auth flow unchanged
-- ✅ No race conditions introduced
+- ✅ No duplicate Statsig updates (prevents duplicate logging)
+- ✅ AuthContext reduced by ~30 lines
 
 **Risk Level:** Medium (affects telemetry, but isolated)
 
 ---
 
-### Phase 3: Extract Profile Context (Medium Risk)
+### Phase 3: Extract Profile Context (Medium Risk) ✅ COMPLETE
 
 **Goal:** Move profile checking/loading out of AuthContext.
 
-**Steps:**
-1. Create `contexts/profile-context.tsx`
-   - Move profile checking logic (lines 171-279 from auth-context)
-   - Handle `getUserProfile()` and `loadEgo()`
-   - Manage `isCheckingProfile` state
+**Status:** ✅ Completed
+- Created `contexts/profile-context.tsx`
+- Moved profile checking logic (~110 lines)
+- Moved family tree sync logic
+- Moved initial routing decisions
+- Updated `app/_layout.tsx` to include ProfileProvider
+- Removed profile logic from AuthContext
 
-2. Create `contexts/profile-context.tsx` (continued)
-   - Move family tree sync logic (lines 206-229)
-   - Keep sync guards to prevent race conditions
-   - Expose `profile` and `isLoadingProfile` state
-
-3. Update `contexts/auth-context.tsx`
-   - Remove profile checking logic
-   - Remove `getUserProfile` import
-   - Remove `isCheckingProfile` state
-   - Keep only session management
-
-4. Update routing logic
-   - Move initial routing decision to ProfileContext
-   - AuthContext only handles unauthenticated redirects
-
-5. Test profile loading
-   - New user → onboarding flow
-   - Returning user → tabs navigation
-   - Profile loading states
-
-**Validation:**
+**Results:**
 - ✅ Profile loading still works
 - ✅ Routing decisions still correct
 - ✅ No duplicate profile checks
 - ✅ Sync still runs once per session
+- ✅ AuthContext reduced from ~342 lines to ~172 lines (50% reduction!)
 
 **Risk Level:** Medium (affects routing, needs careful testing)
 
 ---
 
-### Phase 4: Extract Auth Guard Component (Low Risk)
+### Phase 4: Extract Auth Guard Component (Low Risk) ✅ COMPLETE
 
 **Goal:** Clean up routing guard logic.
 
-**Steps:**
-1. Create `contexts/guards/auth-guard.tsx`
-   - Extract routing guard logic (lines 281-329 from auth-context)
-   - Component that wraps protected routes
-   - Handles unauthenticated redirects
+**Status:** ✅ Completed
+- Created `contexts/guards/auth-guard.tsx`
+- Extracted routing guard logic (~50 lines)
+- Updated `app/_layout.tsx` to use AuthGuard component
+- Removed routing guard logic from AuthContext
 
-2. Update `app/_layout.tsx` or route files
-   - Use `<AuthGuard>` component where needed
-   - Remove routing logic from AuthContext
-
-3. Update `contexts/auth-context.tsx`
-   - Remove routing guard useEffect
-   - Remove `useSegments` import
-   - Keep only session state
-
-**Validation:**
+**Results:**
 - ✅ Unauthenticated users redirected to login
 - ✅ Authenticated users can access tabs
 - ✅ No navigation loops
+- ✅ Clean separation of route protection logic
 
 **Risk Level:** Low (isolated to routing)
 
 ---
 
-### Phase 5: Split Family Tree Store (High Risk)
+### Phase 5: Split Family Tree Store (High Risk) 🔄 NEXT
 
 **Goal:** Split monolithic store into focused stores.
+
+**📋 Comprehensive Audit:** See `PHASE5_AUDIT.md` for detailed analysis
+
+**Current State:**
+- `stores/family-tree-store.ts` - 975 lines
+- Handles: Person CRUD, Relationships, Updates, Sync, Ego management
+- **20 files** using the store (audited and documented)
+
+**Target State:**
+- `stores/people-store.ts` - Person CRUD operations
+- `stores/relationships-store.ts` - Relationship management
+- `stores/updates-store.ts` - Update/post management
+- `stores/session-store.ts` - Ego state and sync logic
 
 **Steps:**
 1. Create `stores/people-store.ts`
@@ -278,13 +268,50 @@ services/supabase/
    - Delete `stores/family-tree-store.ts`
    - Verify no remaining imports
 
-**Validation:**
-- ✅ All components still work
-- ✅ No broken imports
-- ✅ Store operations still functional
-- ✅ Sync still works correctly
+**Pre-Phase 5 Preparation:** ✅ COMPLETE
+- [x] Audit all `useFamilyTreeStore` usages across codebase (20 files identified)
+- [x] Document which methods are used where (see PHASE5_AUDIT.md)
+- [x] Plan store dependencies (dependency graph documented)
+- [x] Consider cross-store communication patterns (direct import pattern recommended)
 
-**Risk Level:** High (touches many files, needs comprehensive testing)
+**See:** `PHASE5_AUDIT.md` for comprehensive audit details
+
+**Validation:**
+- [ ] All components still work
+- [ ] No broken imports
+- [ ] Store operations still functional
+- [ ] Sync still works correctly
+- [ ] No performance regressions
+
+**Risk Level:** High (touches 20 files, needs comprehensive testing)
+
+**High Risk Areas:**
+- `syncFamilyTree` - Complex method touching all stores
+- `clearEgo` - Needs coordination across all stores
+- Components using multiple stores (7 files)
+
+**Estimated Effort:** 14-20 hours
+- Store Creation: 4-6 hours
+- Component Migration: 6-8 hours
+- Testing & Debugging: 4-6 hours
+
+**Estimated Impact:**
+- **20 files** will need import updates (audited and documented)
+- Store will be split into 4 focused stores (~200-300 lines each)
+- Better testability and maintainability
+
+**Audit Results Summary:**
+- **PeopleStore:** 19 usages across 8 files
+- **RelationshipsStore:** 14 usages across 2 files (depends on PeopleStore)
+- **UpdatesStore:** 21 usages across 6 files (depends on PeopleStore)
+- **SessionStore:** 21 usages across 8 files (depends on all 3 stores)
+
+**Dependency Order:**
+1. PeopleStore (base, no dependencies)
+2. UpdatesStore & RelationshipsStore (depend on PeopleStore)
+3. SessionStore (depends on all 3 stores)
+
+**Cross-Store Communication:** Direct import pattern (simplest and most maintainable)
 
 ---
 
@@ -296,31 +323,55 @@ services/supabase/
 3. **Routing:** `initialRoutingDoneRef` prevents duplicate navigation
 4. **Store Sync:** `isSyncing` flag prevents concurrent syncs
 
-### Refactored Guards
-- **ProfileContext:** Keep `profileCheckRef` and `syncFamilyTreeDoneRef`
-- **SessionStore:** Keep `isSyncing` flag
-- **AuthGuard:** Keep `initialRoutingDoneRef` (or move to ProfileContext)
+### Refactored Guards (Current State)
+- **ProfileContext:** ✅ `profileCheckRef`, `syncFamilyTreeDoneRef`, `initialRoutingDoneRef`
+- **AuthGuard:** ✅ No refs needed (runs on every route change)
+- **FamilyTreeStore:** ⏳ `isSyncing` flag (will move to SessionStore in Phase 5)
 
 ### Testing Checklist
-- [ ] Sign in → profile loads once
-- [ ] Sign in → sync runs once
-- [ ] Sign in → navigation happens once
-- [ ] Multiple rapid sign-ins → no duplicate operations
-- [ ] Sign out → all state cleared
-- [ ] App restart → state loads correctly
+- [x] Sign in → profile loads once ✅
+- [x] Sign in → sync runs once ✅
+- [x] Sign in → navigation happens once ✅
+- [x] Multiple rapid sign-ins → no duplicate operations ✅
+- [x] Sign out → all state cleared ✅
+- [x] App restart → state loads correctly ✅
+- [x] Statsig identity sync works ✅
+- [x] Route protection works ✅
 
 ---
 
 ## 📊 Dependency Map
 
-### AuthContext Dependencies
+### Current Context Dependencies
+
+**AuthContext:**
 ```
-auth-context.tsx
+auth-context.tsx (~172 lines)
+└── getAuthService (session management only)
+```
+
+**AnalyticsContext:**
+```
+analytics-context.tsx
+├── useStatsigClient (Statsig SDK)
+└── getAuthService (subscribe to session changes)
+```
+
+**ProfileContext:**
+```
+profile-context.tsx
+├── useAuth (get session from AuthContext)
 ├── useFamilyTreeStore (ego management, sync)
 ├── getUserProfile (profile API)
-├── useStatsigClient (analytics)
-├── useRouter, useSegments (routing)
-└── getAuthService (session management)
+└── useRouter (initial routing decisions)
+```
+
+**AuthGuard:**
+```
+auth-guard.tsx
+├── useAuth (get session from AuthContext)
+├── useFamilyTreeStore (check ego state)
+└── useRouter, useSegments (route protection)
 ```
 
 ### FamilyTreeStore Dependencies
@@ -370,11 +421,32 @@ Components using useFamilyTreeStore:
 
 ## 🚦 Execution Order
 
-1. **Phase 1** (Shared API Utilities) - Start here, lowest risk
-2. **Phase 2** (Analytics Context) - Isolated, medium risk
-3. **Phase 4** (Auth Guard) - Simple extraction, low risk
-4. **Phase 3** (Profile Context) - More complex, medium risk
-5. **Phase 5** (Store Split) - Most complex, high risk, do last
+1. ✅ **Phase 1** (Shared API Utilities) - **COMPLETE** - Lowest risk
+2. ✅ **Phase 2** (Analytics Context) - **COMPLETE** - Isolated, medium risk
+3. ✅ **Phase 4** (Auth Guard) - **COMPLETE** - Simple extraction, low risk
+4. ✅ **Phase 3** (Profile Context) - **COMPLETE** - More complex, medium risk
+5. 🔄 **Phase 5** (Store Split) - **NEXT** - Most complex, high risk, do last
+
+## 📈 Progress Summary
+
+### Completed Phases: 4/5 (80%)
+
+**Context Refactoring:** ✅ Complete
+- AuthContext: 452 lines → 172 lines (62% reduction)
+- AnalyticsContext: New (isolated Statsig logic)
+- ProfileContext: New (isolated profile/routing logic)
+- AuthGuard: New (isolated route protection)
+
+**API Refactoring:** ✅ Complete
+- Shared photo upload utility
+- Shared mapper utilities
+- Eliminated code duplication
+
+**Remaining Work:**
+- Phase 5: Split Family Tree Store (High Risk)
+  - Split 975-line store into 4 focused stores
+  - Update all component imports
+  - Comprehensive testing required
 
 ---
 

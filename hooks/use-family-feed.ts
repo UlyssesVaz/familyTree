@@ -15,7 +15,8 @@
  */
 
 import { useMemo } from 'react';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useUpdatesStore } from '@/stores/updates-store';
 import type { Update, Person } from '@/types/family-tree';
 
 export type FeedFilter = 'all' | 'group';
@@ -50,9 +51,9 @@ export interface UseFamilyFeedResult {
  * @returns Object containing filtered updates array and total count
  */
 export function useFamilyFeed(filter: FeedFilter = 'all'): UseFamilyFeedResult {
-  const updatesMap = useFamilyTreeStore((state) => state.updates);
-  const updatesMapSize = useFamilyTreeStore((state) => state.updates.size);
-  const getPerson = useFamilyTreeStore((state) => state.getPerson);
+  const updatesMap = useUpdatesStore((state) => state.updates);
+  const updatesMapSize = useUpdatesStore((state) => state.updates.size);
+  const getPerson = usePeopleStore((state) => state.getPerson);
 
   // Memoize all family updates with enrichment
   const allUpdates = useMemo(() => {

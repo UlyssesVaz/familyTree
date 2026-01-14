@@ -16,7 +16,8 @@
  */
 
 import { useMemo } from 'react';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useRelationshipsStore } from '@/stores/relationships-store';
 import type { Person } from '@/types/family-tree';
 
 export interface TreeLayout {
@@ -47,13 +48,13 @@ export interface TreeLayout {
 export function useTreeLayout(egoId: string | null): TreeLayout {
   // Only subscribe to peopleSize, not the people Map itself (prevents constant re-renders)
   // The people Map reference changes on every update, but size only changes when people are added/removed
-  const peopleSize = useFamilyTreeStore((state) => state.people.size);
+  const peopleSize = usePeopleStore((state) => state.people.size);
   
   // CRITICAL FIX: Track relationship changes, not just people size
   // When relationships are added, peopleSize doesn't change, but relationship arrays do
   // We need to recalculate when relationships change
   // Use a stable hash that only changes when relationships actually change
-  const relationshipsHash = useFamilyTreeStore((state) => {
+  const relationshipsHash = usePeopleStore((state) => {
     // Create a stable hash string of all relationship IDs to detect changes
     // Sorting ensures stable hash even if order changes
     const allRelationshipIds: string[] = [];
@@ -80,7 +81,7 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
   // Access people from store state inside memo (getState() doesn't cause re-renders)
   const ego = useMemo(() => {
     if (!egoId) return null;
-    const people = useFamilyTreeStore.getState().people;
+    const people = usePeopleStore.getState().people;
     const egoPerson = people.get(egoId) || null;
     return egoPerson;
   }, [egoId, peopleSize, relationshipsHash]);
@@ -119,8 +120,9 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       return Array.from(expanded.values());
     };
     
-      // Get store methods inside memo (getState() doesn't cause re-renders)
-      const { getPerson, getSiblings } = useFamilyTreeStore.getState();
+    // Get store methods inside memo (getState() doesn't cause re-renders)
+    const getPerson = usePeopleStore.getState().getPerson;
+    const getSiblings = useRelationshipsStore.getState().getSiblings;
       
       // Start with ego's parents (generation 0) and expand with siblings
       let currentGeneration = expandGenerationWithSiblings(
@@ -172,7 +174,8 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
     if (!ego) return [];
     
     // Get store methods inside memo (getState() doesn't cause re-renders)
-    const { getPerson, getSiblings } = useFamilyTreeStore.getState();
+    const getPerson = usePeopleStore.getState().getPerson;
+    const getSiblings = useRelationshipsStore.getState().getSiblings;
     
     const generations: Person[][] = [];
     const visited = new Set<string>();
@@ -250,7 +253,8 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
     }
 
     // Get store methods inside memo (getState() doesn't cause re-renders)
-    const { getPerson, getSiblings } = useFamilyTreeStore.getState();
+    const getPerson = usePeopleStore.getState().getPerson;
+    const getSiblings = useRelationshipsStore.getState().getSiblings;
 
     const spouses = ego.spouseIds
       .map((id) => getPerson(id))

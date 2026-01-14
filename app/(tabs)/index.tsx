@@ -20,7 +20,9 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTreeLayout } from '@/hooks/use-tree-layout';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useRelationshipsStore } from '@/stores/relationships-store';
+import { useSessionStore } from '@/stores/session-store';
 import type { Gender, Person } from '@/types/family-tree';
 
 /**
@@ -45,8 +47,8 @@ function GenerationRow({
   onPersonAddPress?: (person: Person) => void;
   onPersonPress?: (person: Person) => void;
 }) {
-  const getPerson = useFamilyTreeStore((state) => state.getPerson);
-  const getSiblings = useFamilyTreeStore((state) => state.getSiblings);
+  const getPerson = usePeopleStore((state) => state.getPerson);
+  const getSiblings = useRelationshipsStore((state) => state.getSiblings);
 
   if (isEgo && egoPerson) {
     // Special handling for ego row - ego is centered, then siblings on right
@@ -177,7 +179,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id;
-  const egoId = useFamilyTreeStore((state) => state.egoId);
+  const egoId = useSessionStore((state) => state.egoId);
   const { client: statsigClient } = useStatsigClient();
   
   // Use the custom hook to get all tree layout calculations
@@ -260,11 +262,11 @@ export default function HomeScreen() {
       return;
     }
 
-    const addPerson = useFamilyTreeStore.getState().addPerson;
-    const addParent = useFamilyTreeStore.getState().addParent;
-    const addSpouse = useFamilyTreeStore.getState().addSpouse;
-    const addChild = useFamilyTreeStore.getState().addChild;
-    const addSibling = useFamilyTreeStore.getState().addSibling;
+    const addPerson = usePeopleStore.getState().addPerson;
+    const addParent = useRelationshipsStore.getState().addParent;
+    const addSpouse = useRelationshipsStore.getState().addSpouse;
+    const addChild = useRelationshipsStore.getState().addChild;
+    const addSibling = useRelationshipsStore.getState().addSibling;
 
     try {
       // Create the new person (await async call and pass userId)

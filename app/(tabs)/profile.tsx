@@ -13,7 +13,10 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useProfileUpdates } from '@/hooks/use-profile-updates';
 import { useUpdateManagement } from '@/hooks/use-update-management';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useRelationshipsStore } from '@/stores/relationships-store';
+import { useUpdatesStore } from '@/stores/updates-store';
+import { useSessionStore } from '@/stores/session-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { useAuth } from '@/contexts/auth-context';
@@ -40,15 +43,15 @@ export default function ProfileScreen() {
   const { signOut, session } = useAuth();
   const { client: statsigClient } = useStatsigClient();
   
-  const ego = useFamilyTreeStore((state) => state.getEgo());
-  const egoId = useFamilyTreeStore((state) => state.egoId);
+  const ego = useSessionStore((state) => state.getEgo());
+  const egoId = useSessionStore((state) => state.egoId);
   
   // Profile tab always shows ego's profile (no personId param)
   const person = ego;
   const isEgo = true; // Always true for profile tab
-  const countAncestors = useFamilyTreeStore((state) => state.countAncestors);
-  const countDescendants = useFamilyTreeStore((state) => state.countDescendants);
-  const updateEgoStore = useFamilyTreeStore((state) => state.updateEgo);
+  const countAncestors = useRelationshipsStore((state) => state.countAncestors);
+  const countDescendants = useRelationshipsStore((state) => state.countDescendants);
+  const updateEgoStore = useSessionStore((state) => state.updateEgo);
   
   // Handle profile updates with photo upload and database save
   const handleUpdateEgo = async (updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>) => {
@@ -88,11 +91,11 @@ export default function ProfileScreen() {
       );
     }
   };
-  const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
-  const toggleUpdatePrivacy = useFamilyTreeStore((state) => state.toggleUpdatePrivacy);
-  const updateUpdate = useFamilyTreeStore((state) => state.updateUpdate);
-  const getPerson = useFamilyTreeStore((state) => state.getPerson);
-  const toggleTaggedUpdateVisibility = useFamilyTreeStore((state) => state.toggleTaggedUpdateVisibility);
+  const addUpdate = useUpdatesStore((state) => state.addUpdate);
+  const toggleUpdatePrivacy = useUpdatesStore((state) => state.toggleUpdatePrivacy);
+  const updateUpdate = useUpdatesStore((state) => state.updateUpdate);
+  const getPerson = usePeopleStore((state) => state.getPerson);
+  const toggleTaggedUpdateVisibility = useUpdatesStore((state) => state.toggleTaggedUpdateVisibility);
   
   // Use custom hook to get updates for the profile person
   const { updates, updateCount } = useProfileUpdates(egoId);
@@ -112,7 +115,7 @@ export default function ProfileScreen() {
   } = useUpdateManagement();
   
   // Subscribe to people Map for other uses
-  const people = useFamilyTreeStore((state) => state.people);
+  const people = usePeopleStore((state) => state.people);
   const peopleArray = Array.from(people.values());
 
   const toggleColorScheme = () => {
@@ -753,8 +756,8 @@ export default function ProfileScreen() {
               updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
               
               // Track event: wall_entry_updated
-              const update = useFamilyTreeStore.getState().updates.get(updateId);
-              const currentEgoId = useFamilyTreeStore.getState().egoId;
+              const update = useUpdatesStore.getState().updates.get(updateId);
+              const currentEgoId = useSessionStore.getState().egoId;
               const isOnOtherWall = update?.personId !== currentEgoId;
               const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
               

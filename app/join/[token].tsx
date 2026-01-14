@@ -27,7 +27,7 @@ import { useAuth } from '@/contexts/auth-context';
 import GoogleSignInButton from '@/components/auth';
 import { getInvitationLink, claimInvitationLink } from '@/services/supabase/invitations-api';
 import { getUserProfile } from '@/services/supabase/people-api';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { useSessionStore } from '@/stores/session-store';
 
 export default function JoinScreen() {
   const router = useRouter();
@@ -108,7 +108,7 @@ export default function JoinScreen() {
             text: 'OK',
             onPress: () => {
               // Refresh family tree to load the claimed profile
-              useFamilyTreeStore.getState().syncFamilyTree(session.user.id);
+              useSessionStore.getState().syncFamilyTree(session.user.id);
               // Navigate to home
               router.replace('/(tabs)');
             },

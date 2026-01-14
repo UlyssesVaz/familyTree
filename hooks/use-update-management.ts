@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Alert, Platform } from 'react-native';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { useUpdatesStore } from '@/stores/updates-store';
 import type { Update } from '@/types/family-tree';
 
 /**
@@ -22,7 +22,7 @@ export function useUpdateManagement() {
   const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   
-  const deleteUpdate = useFamilyTreeStore((state) => state.deleteUpdate);
+  const deleteUpdate = useUpdatesStore((state) => state.deleteUpdate);
   const deleteUpdateRef = useRef(deleteUpdate);
   
   // Keep ref in sync with store action (handles store updates)

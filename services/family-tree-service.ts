@@ -18,7 +18,10 @@
  * **Future:** Will call Firebase/backend APIs and sync with store
  */
 
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useRelationshipsStore } from '@/stores/relationships-store';
+import { useUpdatesStore } from '@/stores/updates-store';
+import { useSessionStore } from '@/stores/session-store';
 import type { Person, Update, Gender } from '@/types/family-tree';
 
 /**
@@ -49,7 +52,7 @@ export class FamilyTreeService {
   }): string {
     // Currently: Direct store call
     // Future: API call + store update
-    return useFamilyTreeStore.getState().addPerson(data);
+    return usePeopleStore.getState().addPerson(data);
   }
 
   /**
@@ -68,20 +71,20 @@ export class FamilyTreeService {
   ): void {
     // Currently: Direct store calls
     // Future: API call + store update
-    const store = useFamilyTreeStore.getState();
+    const relationshipsStore = useRelationshipsStore.getState();
     
     switch (relationshipType) {
       case 'parent':
-        store.addParent(personId, relatedPersonId);
+        relationshipsStore.addParent(personId, relatedPersonId);
         break;
       case 'spouse':
-        store.addSpouse(personId, relatedPersonId);
+        relationshipsStore.addSpouse(personId, relatedPersonId);
         break;
       case 'child':
-        store.addChild(personId, relatedPersonId);
+        relationshipsStore.addChild(personId, relatedPersonId);
         break;
       case 'sibling':
-        store.addSibling(personId, relatedPersonId);
+        relationshipsStore.addSibling(personId, relatedPersonId);
         break;
     }
   }
@@ -109,7 +112,7 @@ export class FamilyTreeService {
   ): string {
     // Currently: Direct store call
     // Future: Upload photo to storage, POST to API, sync response
-    return useFamilyTreeStore.getState().addUpdate(
+    return useUpdatesStore.getState().addUpdate(
       personId,
       title,
       photoUrl,
@@ -137,7 +140,7 @@ export class FamilyTreeService {
   ): void {
     // Currently: Direct store call
     // Future: PUT to API + store update
-    useFamilyTreeStore.getState().updateUpdate(
+    useUpdatesStore.getState().updateUpdate(
       updateId,
       title,
       photoUrl,
@@ -157,7 +160,7 @@ export class FamilyTreeService {
   deleteUpdate(updateId: string): void {
     // Currently: Direct store call
     // Future: DELETE from API + store update
-    useFamilyTreeStore.getState().deleteUpdate(updateId);
+    useUpdatesStore.getState().deleteUpdate(updateId);
   }
 
   /**
@@ -174,9 +177,9 @@ export class FamilyTreeService {
   ): void {
     // Currently: Direct store call
     // Future: PUT to API + store update
-    const store = useFamilyTreeStore.getState();
-    if (personId === store.egoId) {
-      store.updateEgo(data);
+    const sessionStore = useSessionStore.getState();
+    if (personId === sessionStore.egoId) {
+      sessionStore.updateEgo(data);
     } else {
       // For non-ego people, we'd need an updatePerson method in the store
       // This is a placeholder for future implementation
@@ -215,7 +218,7 @@ export class FamilyTreeService {
   ): void {
     // Currently: Direct store call
     // Future: POST to API + store update
-    useFamilyTreeStore.getState().initializeEgo(name, birthDate, gender, userId);
+    useSessionStore.getState().initializeEgo(name, birthDate, gender, userId);
   }
 }
 

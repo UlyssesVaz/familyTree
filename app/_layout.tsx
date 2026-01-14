@@ -19,6 +19,9 @@ import 'react-native-reanimated';
 
 import { ColorSchemeProvider, useColorSchemeContext } from '@/contexts/color-scheme-context';
 import { AuthProvider } from '@/contexts/auth-context';
+import { AnalyticsProvider } from '@/contexts/analytics-context';
+import { ProfileProvider } from '@/contexts/profile-context';
+import { AuthGuard } from '@/contexts/guards/auth-guard';
 import { ErrorProvider } from '@/contexts/error-context';
 import { ModalProvider } from '@/contexts/modal-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -83,12 +86,20 @@ export default function RootLayout() {
           <ColorSchemeProvider>
             <ErrorProvider>
               <ModalProvider>
-                {/* PRO APPROACH: Statsig starts immediately as guest, above AuthProvider */}
+                {/* PRO APPROACH: Statsig starts immediately as guest, above all providers */}
+                {/* AnalyticsProvider syncs Statsig identity with auth state */}
+                {/* ProfileProvider handles profile loading and routing decisions */}
                 {/* This ensures Statsig is ready to catch telemetry from AuthProvider itself */}
                 <StatsigProvider>
-                  <AuthProvider>
-                    <RootLayoutNav />
-                  </AuthProvider>
+                  <AnalyticsProvider>
+                    <AuthProvider>
+                      <ProfileProvider>
+                        <AuthGuard>
+                          <RootLayoutNav />
+                        </AuthGuard>
+                      </ProfileProvider>
+                    </AuthProvider>
+                  </AnalyticsProvider>
                 </StatsigProvider>
               </ModalProvider>
             </ErrorProvider>

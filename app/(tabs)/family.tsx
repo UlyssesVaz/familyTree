@@ -11,7 +11,9 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyFeed, type FeedFilter } from '@/hooks/use-family-feed';
 import { useUpdateManagement } from '@/hooks/use-update-management';
-import { useFamilyTreeStore } from '@/stores/family-tree-store';
+import { usePeopleStore } from '@/stores/people-store';
+import { useUpdatesStore } from '@/stores/updates-store';
+import { useSessionStore } from '@/stores/session-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { useAuth } from '@/contexts/auth-context';
 import type { Update, Person } from '@/types/family-tree';
@@ -27,13 +29,13 @@ export default function FamilyScreen() {
   const { session } = useAuth();
   const { client: statsigClient } = useStatsigClient();
   
-  const ego = useFamilyTreeStore((state) => state.getEgo());
-  const egoId = useFamilyTreeStore((state) => state.egoId);
-  const people = useFamilyTreeStore((state) => state.people);
+  const ego = useSessionStore((state) => state.getEgo());
+  const egoId = useSessionStore((state) => state.egoId);
+  const people = usePeopleStore((state) => state.people);
   const peopleArray = Array.from(people.values());
-  const addUpdate = useFamilyTreeStore((state) => state.addUpdate);
-  const updateUpdate = useFamilyTreeStore((state) => state.updateUpdate);
-  const toggleUpdatePrivacy = useFamilyTreeStore((state) => state.toggleUpdatePrivacy);
+  const addUpdate = useUpdatesStore((state) => state.addUpdate);
+  const updateUpdate = useUpdatesStore((state) => state.updateUpdate);
+  const toggleUpdatePrivacy = useUpdatesStore((state) => state.toggleUpdatePrivacy);
 
   // Use custom hook to get filtered family feed updates
   const { updates: allFamilyUpdates } = useFamilyFeed(filter as FeedFilter);
@@ -338,8 +340,8 @@ export default function FamilyScreen() {
             updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
             
             // Track event: wall_entry_updated
-            const update = useFamilyTreeStore.getState().updates.get(updateId);
-            const egoId = useFamilyTreeStore.getState().egoId;
+            const update = useUpdatesStore.getState().updates.get(updateId);
+            const egoId = useSessionStore.getState().egoId;
             const isOnOtherWall = update?.personId !== egoId;
             const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
             
