@@ -3,10 +3,12 @@
  * 
  * Handles invitation link creation and claiming for family tree profiles.
  * Allows curators to invite relatives to claim their "Ancestor Profiles" (shadow profiles).
+ * 
+ * SECURITY: Uses atomic RPC calls to prevent race conditions and profile hijacking.
  */
 
 import { getSupabaseClient } from './supabase-init';
-import { v4 as uuidv4 } from 'uuid';
+import * as Crypto from 'expo-crypto';
 import { handleSupabaseQuery, handleSupabaseMutation } from '@/utils/supabase-error-handler';
 
 export interface InvitationLink {
@@ -28,8 +30,85 @@ export interface ClaimInvitationLinkInput {
   userId: string; // The user claiming the profile
 }
 
+export interface ClaimResult {
+  targetPersonId: string;
+  personName: string;
+}
+
+export interface InvitationDetails {
+  targetPersonId: string;
+  personName: string;
+  expiresAt: string;
+}
+
+export interface ValidateInvitationTokenResult {
+  isValid: boolean;
+  isAlreadyClaimed: boolean;
+  invitation?: InvitationDetails;
+  errorCode?: 'INVALID_TOKEN' | 'EXPIRED' | 'ALREADY_CLAIMED';
+}
+
+/**
+ * Custom error class for invitation-related errors.
+ * Provides structured error codes and user-friendly messages.
+ */
+export class InvitationError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public userMessage: string
+  ) {
+    super(message);
+    this.name = 'InvitationError';
+  }
+}
+
+/**
+ * Parses error messages from the RPC function into structured error codes.
+ */
+function parseClaimErrorMessage(errorMessage: string): { code: string; userMessage: string } {
+  // Map database error messages to user-friendly messages
+  if (errorMessage.includes('already claimed') || errorMessage.includes('already_claimed')) {
+    return {
+      code: 'ALREADY_CLAIMED',
+      userMessage: 'This profile has already been claimed by another user.',
+    };
+  }
+  if (errorMessage.includes('expired') || errorMessage.includes('EXPIRED')) {
+    return {
+      code: 'EXPIRED',
+      userMessage: 'This invitation link has expired. Please request a new one.',
+    };
+  }
+  if (errorMessage.includes('invalid') || errorMessage.includes('not found') || errorMessage.includes('INVALID')) {
+    return {
+      code: 'INVALID_TOKEN',
+      userMessage: 'This invitation link is invalid or has been used.',
+    };
+  }
+  if (errorMessage.includes('rate limit') || errorMessage.includes('too many')) {
+    return {
+      code: 'RATE_LIMIT',
+      userMessage: 'Too many invitations created. Please wait before creating more.',
+    };
+  }
+  if (errorMessage.includes('permission') || errorMessage.includes('unauthorized')) {
+    return {
+      code: 'PERMISSION_DENIED',
+      userMessage: 'You do not have permission to create invitations for this profile.',
+    };
+  }
+  // Default error
+  return {
+    code: 'UNKNOWN',
+    userMessage: 'An error occurred while processing your request. Please try again.',
+  };
+}
+
 /**
  * Creates an invitation link for a person profile.
+ * 
+ * Uses cryptographically secure random token generation.
  * 
  * @param input - Target person ID and user ID of curator
  * @returns The invitation link with token
@@ -39,8 +118,13 @@ export async function createInvitationLink(
 ): Promise<InvitationLink> {
   const supabase = getSupabaseClient();
 
-  // Generate a unique token (using UUID for simplicity, can switch to nanoid later)
-  const token = uuidv4().replace(/-/g, '').substring(0, 24); // 24-char token
+  // Generate a cryptographically secure random token (32 bytes = 64 hex chars)
+  // We'll use 24 characters for the token (48 hex chars truncated)
+  const randomBytes = await Crypto.getRandomBytesAsync(32);
+  const token = Array.from(randomBytes)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+    .substring(0, 24); // 24-char token
 
   // Set expiration to 7 days from now
   const expiresAt = new Date();
@@ -73,8 +157,67 @@ export async function createInvitationLink(
 }
 
 /**
+ * Validates an invitation token without claiming it.
+ * Used for pre-auth validation in the UI.
+ * 
+ * @param token - The invitation token
+ * @returns Validation result with invitation details if valid
+ */
+export async function validateInvitationToken(
+  token: string
+): Promise<ValidateInvitationTokenResult> {
+  const supabase = getSupabaseClient();
+
+  try {
+    const { data, error } = await supabase
+      .rpc('validate_invitation_token', {
+        p_token: token,
+      })
+      .single();
+
+    if (error) {
+      // RPC function not found or other database error
+      console.error('[Invitations API] Error validating token:', error);
+      return {
+        isValid: false,
+        isAlreadyClaimed: false,
+        errorCode: 'INVALID_TOKEN',
+      };
+    }
+
+    if (!data.is_valid) {
+      // Token is invalid, expired, or already claimed
+      return {
+        isValid: false,
+        isAlreadyClaimed: data.is_already_claimed || false,
+        errorCode: data.error_code || 'INVALID_TOKEN',
+      };
+    }
+
+    // Token is valid
+    return {
+      isValid: true,
+      isAlreadyClaimed: false,
+      invitation: {
+        targetPersonId: data.target_person_id,
+        personName: data.person_name || 'this profile',
+        expiresAt: data.expires_at,
+      },
+    };
+  } catch (error: any) {
+    console.error('[Invitations API] Error validating token:', error);
+    return {
+      isValid: false,
+      isAlreadyClaimed: false,
+      errorCode: 'INVALID_TOKEN',
+    };
+  }
+}
+
+/**
  * Gets an invitation link by token (for validation).
  * 
+ * @deprecated Use validateInvitationToken instead for better security
  * @param token - The invitation token
  * @returns The invitation link if valid and not expired
  */
@@ -116,54 +259,71 @@ export async function getInvitationLink(token: string): Promise<InvitationLink |
 /**
  * Claims an invitation link (sets linked_auth_user_id and deletes the link).
  * 
- * This must be a transaction to prevent double-claiming:
- * 1. Update people.linked_auth_user_id
- * 2. Delete invitation_links row
+ * SECURITY: Uses atomic RPC call to prevent race conditions and double-claiming.
+ * The RPC function uses SELECT ... FOR UPDATE to lock the invitation row,
+ * preventing concurrent claims.
  * 
  * @param input - Token and user ID claiming the profile
- * @returns The target person ID that was claimed
+ * @returns The claim result with target person ID and name
+ * @throws InvitationError with specific error codes
  */
 export async function claimInvitationLink(
   input: ClaimInvitationLinkInput
-): Promise<string> {
+): Promise<ClaimResult> {
   const supabase = getSupabaseClient();
 
-  // First, get the invitation link to validate it exists and get target_person_id
-  const invitation = await getInvitationLink(input.token);
-  if (!invitation) {
-    throw new Error('Invalid or expired invitation link');
+  try {
+    // Single atomic operation - no race condition possible
+    const { data, error } = await supabase
+      .rpc('claim_invitation', {
+        p_token: input.token,
+        p_claiming_user_id: input.userId,
+      })
+      .single();
+
+    if (error) {
+      // Database error (RPC not found, connection error, etc.)
+      console.error('[Invitations API] RPC error:', error);
+      
+      // Try to parse error message if it contains structured error info
+      if (error.message) {
+        const { code, userMessage } = parseClaimErrorMessage(error.message);
+        throw new InvitationError(code, error.message, userMessage);
+      }
+      
+      // Generic error
+      throw new InvitationError(
+        'NETWORK_ERROR',
+        error.message || 'Failed to claim invitation',
+        'Network error. Please check your connection and try again.'
+      );
+    }
+
+    // Check if claim was successful
+    if (!data.success) {
+      const { code, userMessage } = parseClaimErrorMessage(data.error_message || 'Unknown error');
+      throw new InvitationError(code, data.error_message || 'Unknown error', userMessage);
+    }
+
+    // Success!
+    return {
+      targetPersonId: data.target_person_id,
+      personName: data.person_name || 'this profile',
+    };
+  } catch (error: any) {
+    // Re-throw InvitationError as-is
+    if (error instanceof InvitationError) {
+      throw error;
+    }
+    
+    // Wrap other errors
+    console.error('[Invitations API] Unexpected error claiming invitation:', error);
+    throw new InvitationError(
+      'UNKNOWN',
+      error.message || 'Unknown error occurred',
+      'An unexpected error occurred. Please try again.'
+    );
   }
-
-  // Use a transaction-like approach: Update person first, then delete link
-  // If update fails, link remains (can retry)
-  // If update succeeds but delete fails, we'll handle it gracefully
-
-  // Step 1: Update the person's linked_auth_user_id
-  const { error: updateError } = await supabase
-    .from('people')
-    .update({ linked_auth_user_id: input.userId })
-    .eq('user_id', invitation.targetPersonId);
-
-  if (updateError) {
-    handleSupabaseMutation(null, updateError, {
-      apiName: 'Invitations API',
-      operation: 'claim invitation (update linked_auth_user_id)',
-    });
-  }
-
-  // Step 2: Delete the invitation link (prevent double-claiming)
-  const { error: deleteError } = await supabase
-    .from('invitation_links')
-    .delete()
-    .eq('token', input.token);
-
-  if (deleteError) {
-    // Log error but don't fail - the profile is already claimed
-    console.error('[Invitations API] Error deleting invitation link:', deleteError);
-    // Profile is claimed, so we can continue
-  }
-
-  return invitation.targetPersonId;
 }
 
 /**

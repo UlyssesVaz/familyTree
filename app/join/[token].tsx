@@ -5,17 +5,21 @@
  * Route: /join/[token]
  * Deep link: familytreeapp://join/[token]
  * 
+ * SECURITY: Implements proper error handling and state management to prevent
+ * profile hijacking and provide clear user feedback.
+ * 
  * Flow:
  * 1. User clicks invitation link
- * 2. This screen shows invitation details (person name, family tree info)
- * 3. User clicks "Accept" → triggers auth flow
- * 4. After auth, claimInvitationLink() is called
- * 5. Profile's linked_auth_user_id is set, invitation is deleted
- * 6. User is redirected to their profile
+ * 2. Screen validates token (pre-auth)
+ * 3. Shows invitation details (person name, family tree info)
+ * 4. User signs in (if needed)
+ * 5. User clicks "Accept" → atomic claim operation
+ * 6. Profile's linked_auth_user_id is set, invitation is deleted
+ * 7. User is redirected to their profile
  */
 
-import { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, Pressable, Alert, ActivityIndicator } from 'react-native';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
@@ -25,9 +29,23 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
 import GoogleSignInButton from '@/components/auth';
-import { getInvitationLink, claimInvitationLink } from '@/services/supabase/invitations-api';
-import { getUserProfile } from '@/services/supabase/people-api';
+import { 
+  validateInvitationToken, 
+  claimInvitationLink,
+  InvitationError,
+  type InvitationDetails 
+} from '@/services/supabase/invitations-api';
 import { useSessionStore } from '@/stores/session-store';
+
+type ScreenState = 
+  | 'loading'           // Initial load, validating token
+  | 'invalid'          // Token is invalid or expired
+  | 'already_claimed'  // Profile was already claimed by someone
+  | 'ready'            // Valid token, waiting for user action
+  | 'signing_in'       // User is signing in with Google
+  | 'claiming'         // Claiming the profile
+  | 'success'          // Successfully claimed
+  | 'error';           // An error occurred during claim
 
 export default function JoinScreen() {
   const router = useRouter();
@@ -38,133 +56,158 @@ export default function JoinScreen() {
   const colors = Colors[theme];
   const { session, signInWithProvider } = useAuth();
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [isClaiming, setIsClaiming] = useState(false);
-  const [isSigningIn, setIsSigningIn] = useState(false);
-  const [invitation, setInvitation] = useState<{
-    targetPersonId: string;
-    personName: string;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [screenState, setScreenState] = useState<ScreenState>('loading');
+  const [invitation, setInvitation] = useState<InvitationDetails | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const hasAttemptedClaimRef = useRef(false); // Prevent double-claiming
 
-  // Load invitation details
+  // Pre-auth validation using validateInvitationToken
   useEffect(() => {
-    async function loadInvitation() {
+    async function validateToken() {
       if (!token) {
-        setError('No invitation token provided');
-        setIsLoading(false);
+        setScreenState('invalid');
+        setErrorMessage('No invitation token provided');
         return;
       }
 
       try {
-        const invitationLink = await getInvitationLink(token);
+        const result = await validateInvitationToken(token);
         
-        if (!invitationLink) {
-          setError('Invalid or expired invitation link');
-          setIsLoading(false);
+        if (!result.isValid) {
+          if (result.isAlreadyClaimed) {
+            setScreenState('already_claimed');
+            setErrorMessage('This profile has already been claimed by another user.');
+          } else {
+            setScreenState('invalid');
+            setErrorMessage(
+              result.errorCode === 'EXPIRED'
+                ? 'This invitation link has expired. Please request a new one.'
+                : 'This invitation link is invalid or has been used.'
+            );
+          }
           return;
         }
-
-        // Get person details to show name
-        // Note: We need to fetch person by user_id (target_person_id)
-        // For now, we'll just show a generic message
-        // TODO: Add API to get person by user_id without auth check for invitation flow
-        setInvitation({
-          targetPersonId: invitationLink.targetPersonId,
-          personName: 'this profile', // Will be improved in next phase
-        });
-        setIsLoading(false);
+        
+        // Token is valid
+        if (result.invitation) {
+          setInvitation(result.invitation);
+          setScreenState('ready');
+        } else {
+          setScreenState('invalid');
+          setErrorMessage('Invalid invitation details');
+        }
       } catch (err: any) {
-        console.error('[JoinScreen] Error loading invitation:', err);
-        setError(err.message || 'Failed to load invitation');
-        setIsLoading(false);
+        console.error('[JoinScreen] Error validating token:', err);
+        setScreenState('invalid');
+        setErrorMessage('Failed to validate invitation. Please try again.');
       }
     }
 
-    loadInvitation();
+    validateToken();
   }, [token]);
 
   // Handle claiming the profile (after user is authenticated)
-  const handleClaimProfile = async () => {
+  const handleClaimProfile = useCallback(async () => {
     if (!token || !invitation || !session?.user?.id) return;
     if (hasAttemptedClaimRef.current) return; // Prevent double-claiming
 
     hasAttemptedClaimRef.current = true;
-    setIsClaiming(true);
+    setScreenState('claiming');
+    setErrorMessage(null);
     
     try {
-      await claimInvitationLink({
+      const result = await claimInvitationLink({
         token: token,
         userId: session.user.id,
       });
 
-      // Success! Redirect to profile
-      Alert.alert(
-        'Success!',
-        'You have successfully claimed your profile!',
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              // Refresh family tree to load the claimed profile
-              useSessionStore.getState().syncFamilyTree(session.user.id);
-              // Navigate to home
-              router.replace('/(tabs)');
-            },
-          },
-        ]
-      );
+      // Success!
+      setScreenState('success');
+      
+      // Refresh family tree to load the claimed profile
+      await useSessionStore.getState().syncFamilyTree(session.user.id);
+      
+      // Navigate to home after a brief delay to show success state
+      setTimeout(() => {
+        router.replace('/(tabs)');
+      }, 1500);
     } catch (err: any) {
       console.error('[JoinScreen] Error claiming invitation:', err);
-      Alert.alert('Error', err.message || 'Failed to claim profile. Please try again.');
-      setIsClaiming(false);
-      hasAttemptedClaimRef.current = false; // Allow retry
+      
+      if (err instanceof InvitationError) {
+        switch (err.code) {
+          case 'ALREADY_CLAIMED':
+            setScreenState('already_claimed');
+            setErrorMessage(err.userMessage);
+            break;
+          case 'EXPIRED':
+          case 'INVALID_TOKEN':
+            setScreenState('invalid');
+            setErrorMessage(err.userMessage);
+            break;
+          case 'NETWORK_ERROR':
+            setScreenState('error');
+            setErrorMessage(err.userMessage);
+            hasAttemptedClaimRef.current = false; // Allow retry
+            break;
+          default:
+            setScreenState('error');
+            setErrorMessage(err.userMessage || 'Failed to claim profile. Please try again.');
+            hasAttemptedClaimRef.current = false; // Allow retry
+        }
+      } else {
+        setScreenState('error');
+        setErrorMessage(err.message || 'An unexpected error occurred. Please try again.');
+        hasAttemptedClaimRef.current = false; // Allow retry
+      }
     }
-  };
+  }, [token, invitation, session?.user?.id, router]);
 
   // Handle Google sign-in button press
   const handleGoogleSignIn = async () => {
     if (!token || !invitation) return;
     
-    setIsSigningIn(true);
+    setScreenState('signing_in');
+    setErrorMessage(null);
+    
     try {
       await signInWithProvider('google');
       // After sign-in, the auth context will update and we can claim
       // We'll handle the claim in a useEffect that watches session
     } catch (err: any) {
       console.error('[JoinScreen] Error signing in:', err);
-      Alert.alert('Error', err.message || 'Failed to sign in. Please try again.');
-      setIsSigningIn(false);
+      setScreenState('ready'); // Return to ready state
+      setErrorMessage(err.message || 'Failed to sign in. Please try again.');
     }
   };
 
   // Watch for session changes (after sign-in) - automatically claim profile
   useEffect(() => {
-    if (session?.user?.id && invitation && !isClaiming && !hasAttemptedClaimRef.current) {
+    if (session?.user?.id && invitation && screenState === 'ready' && !hasAttemptedClaimRef.current) {
       // User just signed in, now claim the profile automatically
-      setIsSigningIn(false);
       handleClaimProfile();
     }
-  }, [session?.user?.id, invitation]);
+  }, [session?.user?.id, invitation, screenState, handleClaimProfile]);
 
-  if (isLoading) {
+  // Loading state
+  if (screenState === 'loading') {
     return (
       <ThemedView style={styles.container}>
         <ActivityIndicator size="large" color={colors.tint} />
-        <ThemedText style={styles.loadingText}>Loading invitation...</ThemedText>
+        <ThemedText style={styles.loadingText}>Validating invitation...</ThemedText>
       </ThemedView>
     );
   }
 
-  if (error) {
+  // Invalid token state
+  if (screenState === 'invalid') {
     return (
       <ThemedView style={styles.container}>
         <MaterialIcons name="error-outline" size={64} color={colors.error || '#FF3B30'} />
         <ThemedText type="defaultSemiBold" style={styles.errorTitle}>
           Invalid Invitation
         </ThemedText>
-        <ThemedText style={styles.errorText}>{error}</ThemedText>
+        <ThemedText style={styles.errorText}>{errorMessage || 'This invitation link is invalid or has expired.'}</ThemedText>
         <Pressable
           onPress={() => router.replace('/(tabs)')}
           style={[styles.button, { backgroundColor: colors.tint }]}
@@ -175,6 +218,44 @@ export default function JoinScreen() {
     );
   }
 
+  // Already claimed state
+  if (screenState === 'already_claimed') {
+    return (
+      <ThemedView style={styles.container}>
+        <MaterialIcons name="person-off" size={64} color={colors.error || '#FF3B30'} />
+        <ThemedText type="defaultSemiBold" style={styles.errorTitle}>
+          Already Claimed
+        </ThemedText>
+        <ThemedText style={styles.errorText}>
+          {errorMessage || 'This profile has already been claimed by another user.'}
+        </ThemedText>
+        <Pressable
+          onPress={() => router.replace('/(tabs)')}
+          style={[styles.button, { backgroundColor: colors.tint }]}
+        >
+          <ThemedText style={styles.buttonText}>Go Home</ThemedText>
+        </Pressable>
+      </ThemedView>
+    );
+  }
+
+  // Success state
+  if (screenState === 'success') {
+    return (
+      <ThemedView style={styles.container}>
+        <MaterialIcons name="check-circle" size={64} color={colors.tint} />
+        <ThemedText type="defaultSemiBold" style={styles.successTitle}>
+          Success!
+        </ThemedText>
+        <ThemedText style={styles.successText}>
+          You have successfully claimed {invitation?.personName || 'this profile'}!
+        </ThemedText>
+        <ActivityIndicator size="small" color={colors.tint} style={styles.successSpinner} />
+      </ThemedView>
+    );
+  }
+
+  // Ready/Error state - show invitation details
   return (
     <ThemedView style={styles.container}>
       <MaterialIcons name="person-add" size={64} color={colors.tint} />
@@ -184,9 +265,16 @@ export default function JoinScreen() {
       </ThemedText>
 
       <ThemedText style={styles.description}>
-        You've been invited to claim {invitation?.personName} in the family tree.
+        You've been invited to claim {invitation?.personName || 'this profile'} in the family tree.
         Join to see and contribute to your shared family history!
       </ThemedText>
+
+      {errorMessage && screenState === 'error' && (
+        <View style={[styles.errorBanner, { backgroundColor: colors.error || '#FF3B30' }]}>
+          <MaterialIcons name="error-outline" size={20} color="#FFFFFF" />
+          <ThemedText style={styles.errorBannerText}>{errorMessage}</ThemedText>
+        </View>
+      )}
 
       <View style={styles.buttonContainer}>
         {!session?.user?.id ? (
@@ -195,10 +283,10 @@ export default function JoinScreen() {
             <GoogleSignInButton
               onSignInSuccess={() => {
                 // Sign-in success is handled by useEffect watching session
-                setIsSigningIn(false);
+                setScreenState('ready');
               }}
             />
-            {isSigningIn && (
+            {screenState === 'signing_in' && (
               <View style={styles.signingInContainer}>
                 <ActivityIndicator size="small" color={colors.tint} />
                 <ThemedText style={styles.signingInText}>Signing in...</ThemedText>
@@ -209,16 +297,19 @@ export default function JoinScreen() {
           // Show Accept button if already authenticated
           <Pressable
             onPress={handleClaimProfile}
-            disabled={isClaiming}
+            disabled={screenState === 'claiming'}
             style={[
               styles.button,
               styles.primaryButton,
               { backgroundColor: colors.tint },
-              isClaiming && styles.buttonDisabled,
+              screenState === 'claiming' && styles.buttonDisabled,
             ]}
           >
-            {isClaiming ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+            {screenState === 'claiming' ? (
+              <>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ThemedText style={styles.buttonText}>Claiming...</ThemedText>
+              </>
             ) : (
               <ThemedText style={styles.buttonText}>
                 Accept Invitation
@@ -275,6 +366,34 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     opacity: 0.7,
   },
+  successTitle: {
+    fontSize: 24,
+    marginTop: 16,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  successText: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  successSpinner: {
+    marginTop: 16,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    gap: 8,
+    width: '100%',
+  },
+  errorBannerText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    flex: 1,
+  },
   buttonContainer: {
     width: '100%',
     gap: 12,
@@ -286,6 +405,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 52,
+    flexDirection: 'row',
+    gap: 8,
   },
   primaryButton: {
     // backgroundColor set dynamically
