@@ -14,24 +14,6 @@ import { uploadPhotoIfLocal } from './shared/photo-upload';
 import { mapUpdateRow, type UpdatesRow } from './shared/mappers';
 
 /**
- * Database row type for updates table
- * Maps directly to PostgreSQL schema
- * NOTE: PRIMARY KEY is now updates_id (UUID)
- */
-interface UpdatesRow {
-  updates_id: string; // PRIMARY KEY (UUID)
-  user_id: string; // FOREIGN KEY to people.user_id (the person whose wall this update is on)
-  created_by: string; // FOREIGN KEY to auth.users.id (the user who created this update)
-  title: string;
-  photo_url: string | null;
-  caption: string | null;
-  is_public: boolean;
-  created_at: string; // ISO 8601 timestamp
-  updated_at: string; // ISO 8601 timestamp
-  deleted_at?: string | null; // ISO 8601 timestamp for soft delete
-}
-
-/**
  * Database row type for update_tags table
  */
 interface UpdateTagsRow {
@@ -67,13 +49,21 @@ export interface CreateUpdateInput {
  */
 export async function createUpdate(
   userId: string,
-  const photoUrl = await uploadPhotoIfLocal(
-    input.photoUrl,
-    STORAGE_BUCKETS.UPDATE_PHOTOS,
-    authenticatedUserId, // Single folder level: organize by creator only
-    'Updates API'
-  );
-        authenticatedUserId // Single folder level: organize by creator only
+  input: CreateUpdateInput
+): Promise<Update> {
+  const supabase = getSupabaseClient();
+  const authenticatedUserId = userId;
+  
+  // STEP 1: Upload photo if it's a local file URI
+  let photoUrl: string | null = input.photoUrl || null;
+  
+  if (input.photoUrl && input.photoUrl.startsWith('file://')) {
+    try {
+      const uploadedUrl = await uploadPhotoIfLocal(
+        input.photoUrl,
+        STORAGE_BUCKETS.UPDATE_PHOTOS,
+        authenticatedUserId, // Single folder level: organize by creator only
+        'Updates API'
       );
       
       if (uploadedUrl) {
@@ -126,24 +116,23 @@ export async function createUpdate(
   if (input.taggedPersonIds && input.taggedPersonIds.length > 0) {
     // Insert new tags (no need to delete existing tags since this is a new insert)
     const tagRows: Omit<UpdateTagsRow, 'id'>[] = input.taggedPersonIds.map(taggedPersonId => ({
+      update_id: updatesId,
+      tagged_person_id: taggedPersonId,
+    }));
+    
+    const { error: tagsError } = await supabase
+      .from('update_tags')
+      .insert(tagRows);
+    
+    if (tagsError) {
+      console.error('[Updates API] Error creating update tags:', tagsError);
+      // Don't fail the entire update creation if tag creation fails
+      // Continue without tags - user can try again
+    }
+  }
+  
   // STEP 6: Map database response to Update type using shared mapper
   return mapUpdateRow(result, input.taggedPersonIds);
-  // STEP 6: Map database response to Update type
-  const update: Update = {
-    id: updatesId, // UUID primary key
-    personId: result.user_id, // The person this update belongs to
-    title: result.title,
-    photoUrl: result.photo_url || '', // Required field, use empty string if null
-    caption: result.caption || undefined,
-    isPublic: result.is_public,
-    taggedPersonIds: input.taggedPersonIds && input.taggedPersonIds.length > 0 
-      ? input.taggedPersonIds 
-      : undefined,
-    createdAt: new Date(result.created_at).getTime(),
-    createdBy: result.created_by, // The user who created this update
-  };
-  
-  return update;
 }
 
 /**
@@ -183,6 +172,22 @@ export async function getUpdatesForPerson(personId: string): Promise<Update[]> {
     .from('update_tags')
     .select('*')
     .in('update_id', updateIds);
+  
+  if (tagsError) {
+    console.error('[Updates API] Error fetching update tags:', tagsError);
+    // Don't fail - continue without tags
+  }
+  
+  // Build a map of update_id -> tagged person IDs
+  const tagsMap = new Map<string, string[]>();
+  if (tagsData) {
+    for (const tag of tagsData) {
+      const existing = tagsMap.get(tag.update_id) || [];
+      existing.push(tag.tagged_person_id);
+      tagsMap.set(tag.update_id, existing);
+    }
+  }
+  
   // Map database rows to Update type using shared mapper
   const updates: Update[] = updatesData.map((row) => {
     return mapUpdateRow(row, tagsMap.get(row.updates_id));
@@ -245,22 +250,6 @@ export async function getAllUpdates(): Promise<Update[]> {
   // Map database rows to Update type using shared mapper
   const updates: Update[] = updatesData.map((row) => {
     return mapUpdateRow(row, tagsMap.get(row.updates_id));
-  }
-  
-  // Map database rows to Update type
-  const updates: Update[] = updatesData.map((row) => {
-    return {
-      id: row.updates_id, // UUID primary key
-      personId: row.user_id, // The person this update belongs to
-      title: row.title,
-      photoUrl: row.photo_url || '', // Required field, use empty string if null
-      caption: row.caption || undefined,
-      isPublic: row.is_public,
-      taggedPersonIds: tagsMap.get(row.updates_id) || undefined,
-      createdAt: new Date(row.created_at).getTime(),
-      createdBy: row.created_by, // The user who created this update
-      deletedAt: undefined, // deleted_at column doesn't exist in current schema
-    };
   });
   
   return updates;

@@ -233,7 +233,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             initialRoutingDoneRef.current = true;
             // Verify ego belongs to current user
             const egoId = profile.id;
-            const isEgoForCurrentUser = !!(egoId && egoId === currentUserId) || !!(profile.createdBy && profile.createdBy === currentUserId);
+            const isEgoForCurrentUser = profile.linkedAuthUserId === currentUserId;
             
             if (isEgoForCurrentUser) {
               // Returning user with their profile - go to tabs
@@ -311,7 +311,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const ego = useFamilyTreeStore.getState().getEgo();
         const currentUserId = session.user.id;
         const egoId = ego?.id;
-        const isEgoForCurrentUser = !!(egoId && egoId === currentUserId) || !!(ego?.createdBy && ego.createdBy === currentUserId);
+        const isEgoForCurrentUser = ego?.linkedAuthUserId === currentUserId;
         const hasValidProfile = !!ego && isEgoForCurrentUser;
         
         if (!hasValidProfile) {
