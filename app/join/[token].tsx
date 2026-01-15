@@ -145,6 +145,12 @@ export default function JoinScreen() {
             setScreenState('invalid');
             setErrorMessage(err.userMessage);
             break;
+          case 'USER_HAS_PROFILE':
+            // User already has a profile - redirect to home
+            setScreenState('error');
+            setErrorMessage(err.userMessage);
+            setTimeout(() => router.replace('/(tabs)'), 2000);
+            break;
           case 'NETWORK_ERROR':
             setScreenState('error');
             setErrorMessage(err.userMessage);
