@@ -7,6 +7,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { HamburgerMenuButton } from '@/components/settings/SettingsHeader';
 
 import { AddUpdateModal, EditProfileModal, ReportAbuseModal, type ReportReason } from '@/components/family-tree';
+import { reportContent } from '@/services/supabase/reports-api';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -583,9 +584,13 @@ export default function ProfileScreen() {
                             {/* For own updates, show privacy and edit options */}
                             {menuPermissions.canChangeVisibility && (
                               <Pressable
-                                onPress={(e) => {
+                                onPress={async (e) => {
                                   e.stopPropagation();
-                                  toggleUpdatePrivacy(update.id);
+                                  try {
+                                    await toggleUpdatePrivacy(update.id);
+                                  } catch (error: any) {
+                                    Alert.alert('Error', 'Failed to change update visibility. Please try again.');
+                                  }
                                   setMenuUpdateId(null);
                                 }}
                                 style={styles.menuItem}
@@ -759,8 +764,13 @@ export default function ProfileScreen() {
                 console.error('[Profile] Cannot add update: Missing egoId or session');
               }
             }}
-            onEdit={(updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
-              updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+            onEdit={async (updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
+              try {
+                await updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+              } catch (error: any) {
+                Alert.alert('Error', 'Failed to update post. Please try again.');
+                return;
+              }
               
               // Track event: wall_entry_updated
               const update = useUpdatesStore.getState().updates.get(updateId);
@@ -784,14 +794,28 @@ export default function ProfileScreen() {
                 setShowReportModal(false);
                 setReportUpdateId(null);
               }}
-              onSubmit={(reason: ReportReason, description?: string) => {
-                // TODO: Implement report API call
-                console.log('[Profile] Report submitted:', {
-                  updateId: reportUpdateId,
-                  reason,
-                  description,
-                });
-                Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+              onSubmit={async (reason: ReportReason, description?: string) => {
+                if (!session?.user?.id) {
+                  Alert.alert('Error', 'You must be signed in to submit a report.');
+                  return;
+                }
+                
+                try {
+                  // Map 'other' reason to 'abuse' for API compatibility
+                  const apiReason = reason === 'other' ? 'abuse' : reason;
+                  
+                  await reportContent(session.user.id, {
+                    reportType: 'update',
+                    targetId: reportUpdateId!,
+                    reason: apiReason as any, // Type assertion needed due to 'other' -> 'abuse' mapping
+                    description,
+                  });
+                  
+                  Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+                } catch (error: any) {
+                  console.error('[Profile] Error submitting report:', error);
+                  Alert.alert('Error', 'Failed to submit report. Please try again.');
+                }
               }}
               reportType="update"
               targetId={reportUpdateId}

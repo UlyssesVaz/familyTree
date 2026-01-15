@@ -310,8 +310,14 @@ export async function getAllPeople(): Promise<Person[]> {
   
   // STEP 1: Fetch all people and relationships in parallel for efficiency
   // This is significantly faster than sequential fetching
+  // IMPORTANT: Filter out people who have requested 'delete_profile' deletion
+  // People with 'deactivate_profile' remain visible (their profile stays in tree)
   const [peopleResponse, relationshipsResponse] = await Promise.all([
-    supabase.from('people').select('*').order('created_at', { ascending: true }),
+    supabase
+      .from('people')
+      .select('*')
+      .or('deletion_type.is.null,deletion_type.neq.delete_profile')
+      .order('created_at', { ascending: true }),
     supabase.from('relationships').select('*'),
   ]);
 

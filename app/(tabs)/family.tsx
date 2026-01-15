@@ -6,6 +6,7 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { HamburgerMenuButton } from '@/components/settings/SettingsHeader';
 
 import { AddUpdateModal, ReportAbuseModal, type ReportReason } from '@/components/family-tree';
+import { reportContent } from '@/services/supabase/reports-api';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -272,8 +273,12 @@ export default function FamilyScreen() {
                               {/* For own updates, show privacy and edit options */}
                               {menuPermissions.canChangeVisibility && (
                                 <Pressable
-                                  onPress={() => {
-                                    toggleUpdatePrivacy(update.id);
+                                  onPress={async () => {
+                                    try {
+                                      await toggleUpdatePrivacy(update.id);
+                                    } catch (error: any) {
+                                      Alert.alert('Error', 'Failed to change update visibility. Please try again.');
+                                    }
                                     setMenuUpdateId(null);
                                   }}
                                   style={styles.menuItem}
@@ -374,8 +379,13 @@ export default function FamilyScreen() {
             setIsAddingUpdate(false);
             setUpdateToEdit(null);
           }}
-          onEdit={(updateId, title, photoUrl, caption, isPublic, taggedPersonIds) => {
-            updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+          onEdit={async (updateId, title, photoUrl, caption, isPublic, taggedPersonIds) => {
+            try {
+              await updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+            } catch (error: any) {
+              Alert.alert('Error', 'Failed to update post. Please try again.');
+              return;
+            }
             
             // Track event: wall_entry_updated
             const update = useUpdatesStore.getState().updates.get(updateId);
@@ -403,14 +413,28 @@ export default function FamilyScreen() {
             setShowReportModal(false);
             setReportUpdateId(null);
           }}
-          onSubmit={(reason: ReportReason, description?: string) => {
-            // TODO: Implement report API call
-            console.log('[Family] Report submitted:', {
-              updateId: reportUpdateId,
-              reason,
-              description,
-            });
-            Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+          onSubmit={async (reason: ReportReason, description?: string) => {
+            if (!session?.user?.id) {
+              Alert.alert('Error', 'You must be signed in to submit a report.');
+              return;
+            }
+            
+            try {
+              // Map 'other' reason to 'abuse' for API compatibility
+              const apiReason = reason === 'other' ? 'abuse' : reason;
+              
+              await reportContent(session.user.id, {
+                reportType: 'update',
+                targetId: reportUpdateId!,
+                reason: apiReason as any, // Type assertion needed due to 'other' -> 'abuse' mapping
+                description,
+              });
+              
+              Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+            } catch (error: any) {
+              console.error('[Family] Error submitting report:', error);
+              Alert.alert('Error', 'Failed to submit report. Please try again.');
+            }
           }}
           reportType="update"
           targetId={reportUpdateId}

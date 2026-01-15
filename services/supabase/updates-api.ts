@@ -202,16 +202,41 @@ export async function getUpdatesForPerson(personId: string): Promise<Update[]> {
  * This function loads all updates from the database, including tags.
  * Used for initial sync when app starts.
  * 
+ * IMPORTANT: Filters out updates from users who have requested 'delete_profile' deletion.
+ * Updates from 'deactivate_profile' users are kept (their content remains visible).
+ * 
  * @returns Array of all Update objects, sorted by created_at (newest first)
  * @throws Error if query fails
  */
 export async function getAllUpdates(): Promise<Update[]> {
   const supabase = getSupabaseClient();
   
-  // Query all updates (deleted_at column doesn't exist in current schema)
-  const { data: updatesData, error: updatesError } = await supabase
+  // STEP 1: Get all user IDs who have requested 'delete_profile' deletion
+  // These users' updates should be hidden (but 'deactivate_profile' users' updates remain visible)
+  const { data: deletedUsersData } = await supabase
+    .from('people')
+    .select('linked_auth_user_id')
+    .eq('deletion_type', 'delete_profile')
+    .not('deletion_requested_at', 'is', null);
+  
+  const deletedUserIds = (deletedUsersData || [])
+    .map(p => p.linked_auth_user_id)
+    .filter((id): id is string => id !== null);
+  
+  // STEP 2: Query all updates, filtering out updates from deleted users
+  let query = supabase
     .from('updates')
-    .select('*')
+    .select('*');
+  
+  // Filter out updates from deleted users at the SQL level (more efficient)
+  // Use .not() with .in() to exclude multiple user IDs
+  if (deletedUserIds.length > 0) {
+    // Supabase doesn't support .not().in() directly, so we need to use a different approach
+    // We'll filter in JavaScript after fetching, but this is still better than fetching everything
+    // For now, we'll do the filtering after the query (defensive approach)
+  }
+  
+  const { data: updatesData, error: updatesError } = await query
     .order('created_at', { ascending: false }); // Newest first
   
   if (updatesError) {
@@ -247,10 +272,25 @@ export async function getAllUpdates(): Promise<Update[]> {
     }
   }
   
-  // Map database rows to Update type using shared mapper
-  const updates: Update[] = updatesData.map((row) => {
+  // STEP 3: Map database rows to Update type using shared mapper
+  let updates: Update[] = updatesData.map((row) => {
     return mapUpdateRow(row, tagsMap.get(row.updates_id));
   });
+  
+  // STEP 4: Defensive filtering - remove updates from users who requested 'delete_profile' deletion
+  // Note: Updates from 'deactivate_profile' users are kept (their content remains visible)
+  // This is important: 'delete_profile' means hide everything, 'deactivate_profile' means keep content visible
+  if (deletedUserIds.length > 0) {
+    const deletedUserIdsSet = new Set(deletedUserIds);
+    updates = updates.filter(update => {
+      // Filter out updates created by users who requested 'delete_profile' deletion
+      // createdBy is the user ID (from auth.users) who created the update
+      if (!update.createdBy) {
+        return true; // Keep updates without createdBy (shouldn't happen, but be safe)
+      }
+      return !deletedUserIdsSet.has(update.createdBy);
+    });
+  }
   
   return updates;
 }
@@ -346,4 +386,256 @@ export async function deleteUpdate(updateId: string): Promise<void> {
   }
   
   console.log('[Updates API] Successfully deleted update from database');
+}
+
+/**
+ * Input type for updating an existing update
+ */
+export interface UpdateUpdateInput {
+  title?: string;
+  photoUrl?: string; // Can be local file:// URI or remote URL
+  caption?: string;
+  isPublic?: boolean;
+  taggedPersonIds?: string[]; // UUIDs of people tagged via @mentions
+}
+
+/**
+ * Update an existing update in Supabase
+ * 
+ * IMPORTANT: 
+ * - Uploads local photos to Supabase Storage before saving to database
+ * - Updates update_tags entries for @mentions if taggedPersonIds changed
+ * - Verifies user owns the update before allowing edit
+ * - Returns complete Update object with all relationships
+ * 
+ * @param userId - The authenticated user's ID from auth.users (required for verification)
+ * @param updateId - The UUID of the update to update (updates_id)
+ * @param input - Update data to change
+ * @returns Updated Update object
+ * @throws Error if update fails or user doesn't own the update
+ */
+export async function updateUpdate(
+  userId: string,
+  updateId: string,
+  input: UpdateUpdateInput
+): Promise<Update> {
+  const supabase = getSupabaseClient();
+  
+  // STEP 1: Verify user owns this update
+  const { data: existingUpdate, error: fetchError } = await supabase
+    .from('updates')
+    .select('created_by, photo_url')
+    .eq('updates_id', updateId)
+    .single();
+  
+  if (fetchError) {
+    console.error('[Updates API] Error fetching update for edit:', fetchError);
+    throw new Error(`Failed to fetch update: ${fetchError.message}`);
+  }
+  
+  if (!existingUpdate) {
+    throw new Error('Update not found');
+  }
+  
+  if (existingUpdate.created_by !== userId) {
+    throw new Error('Unauthorized: You can only edit your own updates');
+  }
+  
+  // STEP 2: Handle photo upload/replacement if new photo provided
+  let photoUrl: string | null = input.photoUrl || existingUpdate.photo_url || null;
+  
+  if (input.photoUrl && input.photoUrl.startsWith('file://')) {
+    try {
+      // Delete old photo if it exists and is from Storage
+      if (existingUpdate.photo_url) {
+        const storageUrlPattern = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
+        const match = existingUpdate.photo_url.match(storageUrlPattern);
+        if (match) {
+          const bucket = match[1];
+          const filePath = match[2];
+          try {
+            await deleteImage(filePath, bucket);
+          } catch (error) {
+            console.warn('[Updates API] Error deleting old photo, continuing with upload:', error);
+          }
+        }
+      }
+      
+      // Upload new photo
+      const uploadedUrl = await uploadPhotoIfLocal(
+        input.photoUrl,
+        STORAGE_BUCKETS.UPDATE_PHOTOS,
+        userId,
+        'Updates API'
+      );
+      
+      if (uploadedUrl) {
+        photoUrl = uploadedUrl;
+      } else {
+        console.warn('[Updates API] Photo upload returned null, keeping existing photo');
+        photoUrl = existingUpdate.photo_url || null;
+      }
+    } catch (error: any) {
+      console.error('[Updates API] Error uploading photo:', error);
+      // Don't fail the entire update if photo upload fails
+      // Keep existing photo
+      photoUrl = existingUpdate.photo_url || null;
+    }
+  } else if (input.photoUrl === null || input.photoUrl === '') {
+    // Explicitly remove photo
+    if (existingUpdate.photo_url) {
+      const storageUrlPattern = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
+      const match = existingUpdate.photo_url.match(storageUrlPattern);
+      if (match) {
+        const bucket = match[1];
+        const filePath = match[2];
+        try {
+          await deleteImage(filePath, bucket);
+        } catch (error) {
+          console.warn('[Updates API] Error deleting photo, continuing with update:', error);
+        }
+      }
+    }
+    photoUrl = null;
+  }
+  
+  // STEP 3: Prepare update data (only include fields that are being changed)
+  const updateData: Partial<UpdatesRow> = {
+    updated_at: new Date().toISOString(),
+  };
+  
+  if (input.title !== undefined) {
+    updateData.title = input.title.trim();
+  }
+  if (photoUrl !== undefined) {
+    updateData.photo_url = photoUrl;
+  }
+  if (input.caption !== undefined) {
+    updateData.caption = input.caption?.trim() || null;
+  }
+  if (input.isPublic !== undefined) {
+    updateData.is_public = input.isPublic;
+  }
+  
+  // STEP 4: Update database row
+  const { data, error } = await supabase
+    .from('updates')
+    .update(updateData)
+    .eq('updates_id', updateId)
+    .select()
+    .single();
+  
+  const result = handleSupabaseMutation(data, error, {
+    apiName: 'Updates API',
+    operation: 'update update',
+  });
+  
+  // STEP 5: Update update_tags if taggedPersonIds provided
+  if (input.taggedPersonIds !== undefined) {
+    // Delete existing tags
+    const { error: deleteTagsError } = await supabase
+      .from('update_tags')
+      .delete()
+      .eq('update_id', updateId);
+    
+    if (deleteTagsError) {
+      console.error('[Updates API] Error deleting existing tags:', deleteTagsError);
+      // Continue - tags will be out of sync but update will be saved
+    }
+    
+    // Insert new tags if any
+    if (input.taggedPersonIds.length > 0) {
+      const tagRows: Omit<UpdateTagsRow, 'id'>[] = input.taggedPersonIds.map(taggedPersonId => ({
+        update_id: updateId,
+        tagged_person_id: taggedPersonId,
+      }));
+      
+      const { error: tagsError } = await supabase
+        .from('update_tags')
+        .insert(tagRows);
+      
+      if (tagsError) {
+        console.error('[Updates API] Error creating update tags:', tagsError);
+        // Don't fail the entire update if tag creation fails
+      }
+    }
+  }
+  
+  // STEP 6: Fetch tags for the updated update
+  const { data: tagsData } = await supabase
+    .from('update_tags')
+    .select('tagged_person_id')
+    .eq('update_id', updateId);
+  
+  const taggedPersonIds = tagsData?.map(tag => tag.tagged_person_id) || [];
+  
+  // STEP 7: Map database response to Update type using shared mapper
+  return mapUpdateRow(result, taggedPersonIds.length > 0 ? taggedPersonIds : undefined);
+}
+
+/**
+ * Toggle update privacy (public/private)
+ * 
+ * This function toggles the is_public flag for an update.
+ * Verifies user owns the update before allowing the change.
+ * 
+ * @param userId - The authenticated user's ID from auth.users (required for verification)
+ * @param updateId - The UUID of the update to toggle (updates_id)
+ * @returns Updated Update object with new privacy setting
+ * @throws Error if toggle fails or user doesn't own the update
+ */
+export async function toggleUpdatePrivacy(
+  userId: string,
+  updateId: string
+): Promise<Update> {
+  const supabase = getSupabaseClient();
+  
+  // STEP 1: Verify user owns this update and get current privacy setting
+  const { data: existingUpdate, error: fetchError } = await supabase
+    .from('updates')
+    .select('created_by, is_public')
+    .eq('updates_id', updateId)
+    .single();
+  
+  if (fetchError) {
+    console.error('[Updates API] Error fetching update for privacy toggle:', fetchError);
+    throw new Error(`Failed to fetch update: ${fetchError.message}`);
+  }
+  
+  if (!existingUpdate) {
+    throw new Error('Update not found');
+  }
+  
+  if (existingUpdate.created_by !== userId) {
+    throw new Error('Unauthorized: You can only change privacy of your own updates');
+  }
+  
+  // STEP 2: Toggle is_public
+  const newIsPublic = !existingUpdate.is_public;
+  
+  const { data, error } = await supabase
+    .from('updates')
+    .update({
+      is_public: newIsPublic,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('updates_id', updateId)
+    .select()
+    .single();
+  
+  const result = handleSupabaseMutation(data, error, {
+    apiName: 'Updates API',
+    operation: 'toggle update privacy',
+  });
+  
+  // STEP 3: Fetch tags for the update
+  const { data: tagsData } = await supabase
+    .from('update_tags')
+    .select('tagged_person_id')
+    .eq('update_id', updateId);
+  
+  const taggedPersonIds = tagsData?.map(tag => tag.tagged_person_id) || [];
+  
+  // STEP 4: Map database response to Update type using shared mapper
+  return mapUpdateRow(result, taggedPersonIds.length > 0 ? taggedPersonIds : undefined);
 }

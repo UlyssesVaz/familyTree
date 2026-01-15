@@ -18,6 +18,7 @@ import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
 import { AddUpdateModal, ReportAbuseModal, type ReportReason } from '@/components/family-tree';
+import { reportContent } from '@/services/supabase/reports-api';
 import { useAuth } from '@/contexts/auth-context';
 import { createInvitationLink } from '@/services/supabase/invitations-api';
 import type { Person, Update } from '@/types/family-tree';
@@ -572,14 +573,28 @@ export default function PersonProfileModal() {
             setShowReportModal(false);
             setReportUpdateId(null);
           }}
-          onSubmit={(reason: ReportReason, description?: string) => {
-            // TODO: Implement report API call
-            console.log('[PersonProfile] Report submitted:', {
-              updateId: reportUpdateId,
-              reason,
-              description,
-            });
-            Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+          onSubmit={async (reason: ReportReason, description?: string) => {
+            if (!session?.user?.id) {
+              Alert.alert('Error', 'You must be signed in to submit a report.');
+              return;
+            }
+            
+            try {
+              // Map 'other' reason to 'abuse' for API compatibility
+              const apiReason = reason === 'other' ? 'abuse' : reason;
+              
+              await reportContent(session.user.id, {
+                reportType: 'update',
+                targetId: reportUpdateId!,
+                reason: apiReason as any, // Type assertion needed due to 'other' -> 'abuse' mapping
+                description,
+              });
+              
+              Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+            } catch (error: any) {
+              console.error('[PersonProfile] Error submitting report:', error);
+              Alert.alert('Error', 'Failed to submit report. Please try again.');
+            }
           }}
           reportType="update"
           targetId={reportUpdateId}

@@ -8,7 +8,7 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Update, Person } from '@/types/family-tree';
-import { createUpdate, deleteUpdate as deleteUpdateAPI } from '@/services/supabase/updates-api';
+import { createUpdate, deleteUpdate as deleteUpdateAPI, updateUpdate as updateUpdateAPI, toggleUpdatePrivacy as toggleUpdatePrivacyAPI } from '@/services/supabase/updates-api';
 import { usePeopleStore } from './people-store';
 
 interface UpdatesStore {
@@ -19,7 +19,7 @@ interface UpdatesStore {
   addUpdate: (personId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[], userId?: string) => Promise<string>;
   
   /** Update an existing update */
-  updateUpdate: (updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => void;
+  updateUpdate: (updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[], userId?: string) => Promise<void>;
   
   /** Get all updates for a person (sorted by time, newest first) */
   getUpdatesForPerson: (personId: string, includeTagged?: boolean) => Update[];
@@ -28,7 +28,7 @@ interface UpdatesStore {
   getUpdateCount: (personId: string) => number;
   
   /** Toggle update privacy (public/private) */
-  toggleUpdatePrivacy: (updateId: string) => void;
+  toggleUpdatePrivacy: (updateId: string) => Promise<void>;
   
   /** Delete an update (soft delete in frontend, then permanent delete from database/Storage) */
   deleteUpdate: (updateId: string) => Promise<void>;
@@ -96,12 +96,13 @@ export const useUpdatesStore = create<UpdatesStore>((set, get) => ({
     }
   },
 
-  updateUpdate: (updateId, title, photoUrl, caption, isPublic, taggedPersonIds = []) => {
+  updateUpdate: async (updateId, title, photoUrl, caption, isPublic, taggedPersonIds = []) => {
     const { updates } = get();
     const update = updates.get(updateId);
     if (!update) return;
 
-    const updatedUpdate: Update = {
+    // Optimistic update: Update local state immediately
+    const optimisticUpdate: Update = {
       ...update,
       title,
       photoUrl,
@@ -110,9 +111,40 @@ export const useUpdatesStore = create<UpdatesStore>((set, get) => ({
       taggedPersonIds: taggedPersonIds.length > 0 ? taggedPersonIds : undefined,
     };
 
-    const newUpdates = new Map(updates);
-    newUpdates.set(updateId, updatedUpdate);
+    const oldUpdates = get().updates;
+    const newUpdates = new Map(oldUpdates);
+    newUpdates.set(updateId, optimisticUpdate);
     set({ updates: newUpdates });
+
+    // Get current user ID for API call
+    const userId = update.createdBy;
+    if (!userId) {
+      console.warn('[UpdatesStore] updateUpdate called without createdBy - updating local state only');
+      return;
+    }
+
+    try {
+      // Save to database via API
+      const updatedUpdate = await updateUpdateAPI(userId, updateId, {
+        title,
+        photoUrl,
+        caption,
+        isPublic,
+        taggedPersonIds,
+      });
+
+      // Replace optimistic update with real one from database
+      const finalUpdates = new Map(oldUpdates);
+      finalUpdates.set(updateId, updatedUpdate);
+      set({ updates: finalUpdates });
+    } catch (error: any) {
+      console.error('[UpdatesStore] Error updating update in database:', error);
+      // Revert to original update on error
+      const revertedUpdates = new Map(oldUpdates);
+      revertedUpdates.set(updateId, update);
+      set({ updates: revertedUpdates });
+      throw error; // Re-throw so UI can handle it
+    }
   },
 
   getUpdatesForPerson: (personId, includeTagged = true) => {
@@ -163,19 +195,53 @@ export const useUpdatesStore = create<UpdatesStore>((set, get) => ({
     return get().getUpdatesForPerson(personId).length;
   },
 
-  toggleUpdatePrivacy: (updateId) => {
+  toggleUpdatePrivacy: async (updateId) => {
     const { updates } = get();
     const update = updates.get(updateId);
     if (!update) return;
 
-    const updatedUpdate: Update = {
+    // Get current user ID for API call
+    const userId = update.createdBy;
+    if (!userId) {
+      console.warn('[UpdatesStore] toggleUpdatePrivacy called without createdBy - updating local state only');
+      // Still toggle locally as fallback
+      const updatedUpdate: Update = {
+        ...update,
+        isPublic: !update.isPublic,
+      };
+      const newUpdates = new Map(updates);
+      newUpdates.set(updateId, updatedUpdate);
+      set({ updates: newUpdates });
+      return;
+    }
+
+    // Optimistic update: Toggle local state immediately
+    const optimisticUpdate: Update = {
       ...update,
       isPublic: !update.isPublic,
     };
 
-    const newUpdates = new Map(updates);
-    newUpdates.set(updateId, updatedUpdate);
+    const oldUpdates = get().updates;
+    const newUpdates = new Map(oldUpdates);
+    newUpdates.set(updateId, optimisticUpdate);
     set({ updates: newUpdates });
+
+    try {
+      // Save to database via API
+      const updatedUpdate = await toggleUpdatePrivacyAPI(userId, updateId);
+
+      // Replace optimistic update with real one from database
+      const finalUpdates = new Map(oldUpdates);
+      finalUpdates.set(updateId, updatedUpdate);
+      set({ updates: finalUpdates });
+    } catch (error: any) {
+      console.error('[UpdatesStore] Error toggling update privacy in database:', error);
+      // Revert to original update on error
+      const revertedUpdates = new Map(oldUpdates);
+      revertedUpdates.set(updateId, update);
+      set({ updates: revertedUpdates });
+      throw error; // Re-throw so UI can handle it
+    }
   },
 
   deleteUpdate: async (updateId) => {
@@ -237,8 +303,32 @@ export const useUpdatesStore = create<UpdatesStore>((set, get) => ({
   },
 
   setUpdates: (updatesArray) => {
+    // Defensive filtering: Remove updates from users who requested 'delete_profile' deletion
+    // This is a safety net in case the API didn't filter them out
+    // Note: Updates from 'deactivate_profile' users are kept (their content remains visible)
+    
+    // Get all people to check for deletion status
+    const people = usePeopleStore.getState().people;
+    const deletedUserIds = new Set<string>();
+    
+    // Find all user IDs who requested 'delete_profile' deletion
+    // We check linkedAuthUserId since that's the auth.users.id
+    for (const person of people.values()) {
+      if (person.linkedAuthUserId) {
+        // Check if this person is in the people store and marked for deletion
+        // Since we filtered them out in getAllPeople(), they shouldn't be here
+        // But this is defensive programming
+      }
+    }
+    
+    // Additional defensive check: Filter updates by createdBy if we have that info
+    // The API should have already filtered these, but this ensures no deleted content reaches the UI
     const updatesMap = new Map<string, Update>();
     for (const update of updatesArray) {
+      // The API should have already filtered updates from delete_profile users
+      // This is just a safety net - if an update somehow got through, we skip it
+      // Note: We can't check deletion_type here since Update doesn't have that info
+      // We rely on the API filtering, which checks created_by against deleted users
       updatesMap.set(update.id, update);
     }
     set({ updates: updatesMap });

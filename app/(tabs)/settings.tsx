@@ -14,6 +14,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useColorSchemeContext } from '@/contexts/color-scheme-context';
 import { useAuth } from '@/contexts/auth-context';
 import { AccountDeletionModal, type DeletionOption } from '@/components/family-tree';
+import { requestAccountDeletion } from '@/services/supabase/account-api';
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -22,7 +23,7 @@ export default function SettingsScreen() {
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
   const { colorScheme: currentScheme, setColorScheme } = useColorSchemeContext();
-  const { signOut } = useAuth();
+  const { signOut, session } = useAuth();
   const [showAccountDeletionModal, setShowAccountDeletionModal] = useState(false);
 
   const handleSignOut = () => {
@@ -49,16 +50,38 @@ export default function SettingsScreen() {
     );
   };
 
-  const handleDeleteAccount = (option: DeletionOption) => {
-    // TODO: Implement account deletion API call
-    console.log('[Settings] Account deletion requested:', option);
-    Alert.alert(
-      option === 'delete_profile' ? 'Deletion Requested' : 'Deactivation Requested',
-      option === 'delete_profile'
-        ? 'Your profile deletion has been scheduled. Your photos and stories will be removed, and your account information will be deleted within 30 days. You can cancel during this time.'
-        : 'Your account deactivation has been scheduled. Your photos and stories will remain, but your account information will be removed within a year.',
-      [{ text: 'OK', onPress: () => signOut() }]
-    );
+  const handleDeleteAccount = async (option: DeletionOption) => {
+    if (!session?.user?.id) {
+      Alert.alert('Error', 'You must be signed in to delete your account.');
+      return;
+    }
+    
+    try {
+      const deletionStatus = await requestAccountDeletion(session.user.id, option);
+      
+      const gracePeriodEnds = deletionStatus.gracePeriodEndsAt 
+        ? new Date(deletionStatus.gracePeriodEndsAt).toLocaleDateString()
+        : '30 days';
+      
+      Alert.alert(
+        option === 'delete_profile' ? 'Deletion Requested' : 'Deactivation Requested',
+        option === 'delete_profile'
+          ? `Your profile deletion has been scheduled. Your photos and stories will be removed, and your account information will be deleted within 30 days. You can cancel before ${gracePeriodEnds}.\n\nRecovery Token: ${deletionStatus.recoveryToken}\n\nPlease save this token if you want to restore your account.`
+          : `Your account deactivation has been scheduled. Your photos and stories will remain, but your account information will be removed within a year. You can cancel before ${gracePeriodEnds}.\n\nRecovery Token: ${deletionStatus.recoveryToken}\n\nPlease save this token if you want to restore your account.`,
+        [
+          { 
+            text: 'OK', 
+            onPress: () => {
+              // Sign out after deletion request
+              signOut();
+            }
+          }
+        ]
+      );
+    } catch (error: any) {
+      console.error('[Settings] Error requesting account deletion:', error);
+      Alert.alert('Error', `Failed to request account deletion: ${error.message}`);
+    }
   };
 
   return (
