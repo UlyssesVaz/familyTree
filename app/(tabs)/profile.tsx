@@ -4,9 +4,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { HamburgerMenuButton } from '@/components/settings/SettingsHeader';
 
-import { AddUpdateModal, EditProfileModal } from '@/components/family-tree';
-import { useColorSchemeContext } from '@/contexts/color-scheme-context';
+import { AddUpdateModal, EditProfileModal, ReportAbuseModal, type ReportReason } from '@/components/family-tree';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -19,6 +19,7 @@ import { useUpdatesStore } from '@/stores/updates-store';
 import { useSessionStore } from '@/stores/session-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
+import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
 import { useAuth } from '@/contexts/auth-context';
 import { locationService, LocationData } from '@/services/location-service';
 import { uploadImage, STORAGE_BUCKETS } from '@/services/supabase/storage-api';
@@ -36,7 +37,8 @@ export default function ProfileScreen() {
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [showLocationInput, setShowLocationInput] = useState(false);
   const [manualLocationText, setManualLocationText] = useState('');
-  const { colorScheme, setColorScheme } = useColorSchemeContext();
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportUpdateId, setReportUpdateId] = useState<string | null>(null);
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
@@ -117,11 +119,6 @@ export default function ProfileScreen() {
   // Subscribe to people Map for other uses
   const people = usePeopleStore((state) => state.people);
   const peopleArray = Array.from(people.values());
-
-  const toggleColorScheme = () => {
-    const newScheme = colorScheme === 'dark' ? 'light' : 'dark';
-    setColorScheme(newScheme);
-  };
 
   // Extract location from bio if present
   useEffect(() => {
@@ -261,6 +258,7 @@ export default function ProfileScreen() {
 
   return (
     <View style={[styles.wrapper, { backgroundColor, paddingTop: topInset }]}>
+      <HamburgerMenuButton />
       <ScrollView 
         style={styles.scrollView} 
         contentContainerStyle={styles.scrollContent}
@@ -422,8 +420,15 @@ export default function ProfileScreen() {
                 });
                 const isExpanded = expandedUpdateId === update.id;
                 const showMenu = menuUpdateId === update.id;
-                const isTaggedUpdate = update.taggedPersonIds?.includes(person?.id || '') && update.personId !== person?.id;
-                const isOwnUpdate = update.personId === person?.id;
+                
+                // Use utility function to determine menu permissions
+                const menuPermissions = getUpdateMenuPermissions(
+                  update,
+                  session?.user?.id,
+                  person?.id,
+                  egoId,
+                  person
+                );
 
                 return (
                   <View key={update.id} style={styles.updateCardWrapper}>
@@ -442,7 +447,7 @@ export default function ProfileScreen() {
                             <ThemedText type="defaultSemiBold" style={styles.updateTitle}>
                               {update.title}
                             </ThemedText>
-                            {isTaggedUpdate && (
+                            {menuPermissions.canToggleTaggedVisibility && (
                               <View style={[styles.taggedBadge, { backgroundColor: colors.tint + '20' }]}>
                                 <MaterialIcons name="person" size={12} color={colors.tint} />
                                 <ThemedText style={[styles.taggedBadgeText, { color: colors.tint }]}>
@@ -452,7 +457,7 @@ export default function ProfileScreen() {
                             )}
                           </View>
                           <View style={styles.updateMetaRow}>
-                            {isTaggedUpdate && (
+                            {menuPermissions.canToggleTaggedVisibility && (
                               <ThemedText style={[styles.updateAuthor, { color: colors.icon, opacity: 0.7 }]}>
                                 {(() => {
                                   const author = getPerson(update.personId);
@@ -465,8 +470,8 @@ export default function ProfileScreen() {
                             </ThemedText>
                           </View>
                         </View>
-                        {/* Menu button - only show for own updates or tagged updates (for hide/show) */}
-                        {(isOwnUpdate || isTaggedUpdate) && (
+                        {/* Menu button - always show (Report is always available) */}
+                        {menuPermissions.showMenuButton && (
                           <Pressable
                             onPress={() => setMenuUpdateId(update.id)}
                             style={styles.menuButton}
@@ -553,7 +558,7 @@ export default function ProfileScreen() {
                             }}
                           >
                             {/* For tagged updates, show hide/show option */}
-                            {isTaggedUpdate && (
+                            {menuPermissions.canToggleTaggedVisibility && (
                               <Pressable
                                 onPress={(e) => {
                                   e.stopPropagation();
@@ -576,42 +581,59 @@ export default function ProfileScreen() {
                             )}
                             
                             {/* For own updates, show privacy and edit options */}
-                            {isOwnUpdate && (
-                              <>
-                                <Pressable
-                                  onPress={(e) => {
-                                    e.stopPropagation();
-                                    toggleUpdatePrivacy(update.id);
-                                    setMenuUpdateId(null);
-                                  }}
-                                  style={styles.menuItem}
-                                >
-                                  <MaterialIcons
-                                    name={update.isPublic ? 'lock' : 'lock-open'}
-                                    size={20}
-                                    color={colors.text}
-                                  />
-                                  <ThemedText style={styles.menuItemText}>
-                                    Make {update.isPublic ? 'Private' : 'Public'}
-                                  </ThemedText>
-                                </Pressable>
-                                <Pressable
-                                  onPress={(e) => {
-                                    e.stopPropagation();
-                                    setUpdateToEdit(update);
-                                    setMenuUpdateId(null);
-                                    setIsAddingUpdate(true);
-                                  }}
-                                  style={styles.menuItem}
-                                >
-                                  <MaterialIcons name="edit" size={20} color={colors.text} />
-                                  <ThemedText style={styles.menuItemText}>Edit</ThemedText>
-                                </Pressable>
-                              </>
+                            {menuPermissions.canChangeVisibility && (
+                              <Pressable
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  toggleUpdatePrivacy(update.id);
+                                  setMenuUpdateId(null);
+                                }}
+                                style={styles.menuItem}
+                              >
+                                <MaterialIcons
+                                  name={update.isPublic ? 'lock' : 'lock-open'}
+                                  size={20}
+                                  color={colors.text}
+                                />
+                                <ThemedText style={styles.menuItemText}>
+                                  Make {update.isPublic ? 'Private' : 'Public'}
+                                </ThemedText>
+                              </Pressable>
                             )}
-                            
+
+                            {menuPermissions.canEdit && (
+                              <Pressable
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  setUpdateToEdit(update);
+                                  setMenuUpdateId(null);
+                                  setIsAddingUpdate(true);
+                                }}
+                                style={styles.menuItem}
+                              >
+                                <MaterialIcons name="edit" size={20} color={colors.text} />
+                                <ThemedText style={styles.menuItemText}>Edit</ThemedText>
+                              </Pressable>
+                            )}
+
+                            {/* Report option - always available for all updates */}
+                            {menuPermissions.canReport && (
+                              <Pressable
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  setReportUpdateId(update.id);
+                                  setMenuUpdateId(null);
+                                  setShowReportModal(true);
+                                }}
+                                style={styles.menuItem}
+                              >
+                                <MaterialIcons name="flag" size={20} color={colors.text} />
+                                <ThemedText style={styles.menuItemText}>Report</ThemedText>
+                              </Pressable>
+                            )}
+
                             {/* Delete option - only for own updates */}
-                            {isOwnUpdate && (
+                            {menuPermissions.canDelete && (
                               <Pressable
                                 onPress={(e) => {
                                   e.stopPropagation();
@@ -638,21 +660,6 @@ export default function ProfileScreen() {
             </View>
           )}
         </View>
-
-        {/* Temporary: Dark mode toggle (will be moved to settings later) */}
-        <ThemedView style={styles.buttonContainer}>
-          <Pressable
-            onPress={toggleColorScheme}
-            style={({ pressed }) => [
-              styles.button,
-              pressed && styles.buttonPressed,
-            ]}
-          >
-            <ThemedText style={styles.buttonText}>
-              Toggle {colorScheme === 'dark' ? 'Light' : 'Dark'} Mode
-            </ThemedText>
-          </Pressable>
-        </ThemedView>
       </ThemedView>
       </ScrollView>
 
@@ -768,6 +775,28 @@ export default function ProfileScreen() {
               });
             }}
           />
+
+          {/* Report Abuse Modal */}
+          {reportUpdateId && (
+            <ReportAbuseModal
+              visible={showReportModal}
+              onClose={() => {
+                setShowReportModal(false);
+                setReportUpdateId(null);
+              }}
+              onSubmit={(reason: ReportReason, description?: string) => {
+                // TODO: Implement report API call
+                console.log('[Profile] Report submitted:', {
+                  updateId: reportUpdateId,
+                  reason,
+                  description,
+                });
+                Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+              }}
+              reportType="update"
+              targetId={reportUpdateId}
+            />
+          )}
         </>
       )}
     </View>
@@ -1021,22 +1050,31 @@ const styles = StyleSheet.create({
   menuItemText: {
     fontSize: 16,
   },
-  buttonContainer: {
+  settingsSection: {
     marginTop: 20,
+    marginBottom: 20,
     borderRadius: 8,
     overflow: 'hidden',
   },
-  button: {
-    padding: 15,
-    backgroundColor: '#0a7ea4',
-    alignItems: 'center',
+  settingsTitle: {
+    fontSize: 18,
+    padding: 16,
+    paddingBottom: 12,
   },
-  buttonPressed: {
+  settingsItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    gap: 12,
+  },
+  settingsItemPressed: {
     opacity: 0.7,
   },
-  buttonText: {
-    color: '#fff',
-    fontWeight: '600',
+  settingsItemDanger: {
+    // Styled inline for danger color
+  },
+  settingsItemText: {
+    fontSize: 16,
   },
   taggedSection: {
     flexDirection: 'row',

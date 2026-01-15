@@ -16,7 +16,8 @@ import { useUpdatesStore } from '@/stores/updates-store';
 import { useSessionStore } from '@/stores/session-store';
 import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
-import { AddUpdateModal } from '@/components/family-tree';
+import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
+import { AddUpdateModal, ReportAbuseModal, type ReportReason } from '@/components/family-tree';
 import { useAuth } from '@/contexts/auth-context';
 import { createInvitationLink } from '@/services/supabase/invitations-api';
 import type { Person, Update } from '@/types/family-tree';
@@ -53,6 +54,8 @@ export default function PersonProfileModal() {
   const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [isAddingUpdate, setIsAddingUpdate] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportUpdateId, setReportUpdateId] = useState<string | null>(null);
 
   // Use ref to avoid stale closure in useEffect
   const deleteUpdateRef = useRef(useUpdatesStore.getState().deleteUpdate);
@@ -277,8 +280,15 @@ export default function PersonProfileModal() {
                   });
                   const isExpanded = expandedUpdateId === update.id;
                   const showMenu = menuUpdateId === update.id;
-                  const isTaggedUpdate = update.taggedPersonIds?.includes(person.id) && update.personId !== person.id;
-                  const isOwnUpdate = update.personId === person.id;
+                  
+                  // Use utility function to determine menu permissions
+                  const menuPermissions = getUpdateMenuPermissions(
+                    update,
+                    session?.user?.id,
+                    person.id, // The person whose profile we're viewing
+                    egoId,
+                    person // The person object for tagged visibility check
+                  );
 
                   return (
                     <View key={update.id} style={styles.updateCardWrapper}>
@@ -297,7 +307,7 @@ export default function PersonProfileModal() {
                               <ThemedText type="defaultSemiBold" style={styles.updateTitle}>
                                 {update.title}
                               </ThemedText>
-                              {isTaggedUpdate && (
+                              {menuPermissions.canToggleTaggedVisibility && (
                                 <View style={[styles.taggedBadge, { backgroundColor: colors.tint + '20' }]}>
                                   <MaterialIcons name="person" size={12} color={colors.tint} />
                                   <ThemedText style={[styles.taggedBadgeText, { color: colors.tint }]}>
@@ -307,7 +317,7 @@ export default function PersonProfileModal() {
                               )}
                             </View>
                             <View style={styles.updateMetaRow}>
-                              {isTaggedUpdate && (
+                              {menuPermissions.canToggleTaggedVisibility && (
                                 <ThemedText style={[styles.updateAuthor, { color: colors.icon, opacity: 0.7 }]}>
                                   {(() => {
                                     const author = getPerson(update.personId);
@@ -320,8 +330,8 @@ export default function PersonProfileModal() {
                               </ThemedText>
                             </View>
                           </View>
-                          {/* Menu button - only show for own updates or tagged updates (for hide/show) */}
-                          {(isOwnUpdate || isTaggedUpdate) && (
+                          {/* Menu button - always show (Report is always available) */}
+                          {menuPermissions.showMenuButton && (
                             <Pressable
                               onPress={() => setMenuUpdateId(update.id)}
                               style={styles.menuButton}
@@ -407,7 +417,7 @@ export default function PersonProfileModal() {
                               }}
                             >
                               {/* For tagged updates, show hide/show option */}
-                              {isTaggedUpdate && (
+                              {menuPermissions.canToggleTaggedVisibility && (
                                 <Pressable
                                   onPress={(e) => {
                                     e.stopPropagation();
@@ -423,6 +433,78 @@ export default function PersonProfileModal() {
                                   />
                                   <ThemedText style={styles.menuItemText}>
                                     {person.hiddenTaggedUpdateIds?.includes(update.id) ? 'Show on Profile' : 'Hide from Profile'}
+                                  </ThemedText>
+                                </Pressable>
+                              )}
+
+                              {/* For own updates, show privacy and edit options */}
+                              {menuPermissions.canChangeVisibility && (
+                                <Pressable
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    // TODO: Implement visibility toggle API
+                                    console.log('[PersonProfile] Toggle visibility:', update.id);
+                                    Alert.alert('Coming Soon', 'Visibility toggle will be available soon.');
+                                    setMenuUpdateId(null);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons
+                                    name={update.isPublic ? 'lock' : 'lock-open'}
+                                    size={20}
+                                    color={colors.text}
+                                  />
+                                  <ThemedText style={styles.menuItemText}>
+                                    Make {update.isPublic ? 'Private' : 'Public'}
+                                  </ThemedText>
+                                </Pressable>
+                              )}
+
+                              {menuPermissions.canEdit && (
+                                <Pressable
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    // TODO: Implement edit functionality for person profile
+                                    console.log('[PersonProfile] Edit update:', update.id);
+                                    Alert.alert('Coming Soon', 'Edit functionality will be available soon.');
+                                    setMenuUpdateId(null);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons name="edit" size={20} color={colors.text} />
+                                  <ThemedText style={styles.menuItemText}>Edit</ThemedText>
+                                </Pressable>
+                              )}
+
+                              {/* Report option - always available for all updates */}
+                              {menuPermissions.canReport && (
+                                <Pressable
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    setReportUpdateId(update.id);
+                                    setMenuUpdateId(null);
+                                    setShowReportModal(true);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons name="flag" size={20} color={colors.text} />
+                                  <ThemedText style={styles.menuItemText}>Report</ThemedText>
+                                </Pressable>
+                              )}
+
+                              {/* Delete option - only for own updates */}
+                              {menuPermissions.canDelete && (
+                                <Pressable
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    setMenuUpdateId(null);
+                                    setPendingDeleteId(update.id);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons name="delete" size={20} color="#FF3B30" />
+                                  <ThemedText style={[styles.menuItemText, { color: '#FF3B30' }]}>
+                                    Delete
                                   </ThemedText>
                                 </Pressable>
                               )}
@@ -479,6 +561,28 @@ export default function PersonProfileModal() {
             // Close modal - update will appear on this person's profile automatically
             setIsAddingUpdate(false);
           }}
+        />
+      )}
+
+      {/* Report Abuse Modal */}
+      {reportUpdateId && (
+        <ReportAbuseModal
+          visible={showReportModal}
+          onClose={() => {
+            setShowReportModal(false);
+            setReportUpdateId(null);
+          }}
+          onSubmit={(reason: ReportReason, description?: string) => {
+            // TODO: Implement report API call
+            console.log('[PersonProfile] Report submitted:', {
+              updateId: reportUpdateId,
+              reason,
+              description,
+            });
+            Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+          }}
+          reportType="update"
+          targetId={reportUpdateId}
         />
       )}
     </View>

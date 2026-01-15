@@ -60,6 +60,12 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <ProfileTabIcon color={color} />,
         }}
       />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          href: null, // Hide from tab bar
+        }}
+      />
     </Tabs>
   );
 }

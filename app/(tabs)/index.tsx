@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { createInvitationLink } from '@/services/supabase/invitations-api';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
+import { HamburgerMenuButton } from '@/components/settings/SettingsHeader';
 
 import {
   PersonCard,
@@ -378,6 +379,7 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.wrapper, { backgroundColor, paddingTop: topInset }]}>
+      <HamburgerMenuButton />
       <InfiniteCanvas>
         <ThemedView style={[styles.treeContainer, { paddingTop: contentPaddingTop }]}>
           {/* Ancestor Generations (Above Ego) - Recursively display all parent generations */}

@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, Modal, Platform } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View, Modal, Platform, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { HamburgerMenuButton } from '@/components/settings/SettingsHeader';
 
-import { AddUpdateModal } from '@/components/family-tree';
+import { AddUpdateModal, ReportAbuseModal, type ReportReason } from '@/components/family-tree';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -15,6 +16,7 @@ import { usePeopleStore } from '@/stores/people-store';
 import { useUpdatesStore } from '@/stores/updates-store';
 import { useSessionStore } from '@/stores/session-store';
 import { formatMentions } from '@/utils/format-mentions';
+import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
 import { useAuth } from '@/contexts/auth-context';
 import type { Update, Person } from '@/types/family-tree';
 import { useStatsigClient } from '@statsig/expo-bindings';
@@ -23,6 +25,8 @@ import { logStatsigEvent } from '@/utils/statsig-tracking';
 export default function FamilyScreen() {
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState<'all' | 'group'>('all');
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportUpdateId, setReportUpdateId] = useState<string | null>(null);
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
   const colors = Colors[theme];
@@ -63,6 +67,7 @@ export default function FamilyScreen() {
 
   return (
     <View style={[styles.wrapper, { backgroundColor, paddingTop: topInset }]}>
+      <HamburgerMenuButton />
       <ScrollView 
         style={styles.scrollView} 
         contentContainerStyle={styles.scrollContent}
@@ -154,7 +159,15 @@ export default function FamilyScreen() {
                   });
                   const isExpanded = expandedUpdateId === update.id;
                   const showMenu = menuUpdateId === update.id;
-                  const isOwnUpdate = update.personId === egoId;
+                  
+                  // Use utility function to determine menu permissions
+                  const menuPermissions = getUpdateMenuPermissions(
+                    update,
+                    session?.user?.id,
+                    person?.id, // The person whose wall this update is on
+                    egoId,
+                    undefined // Not viewing a specific person's profile in family feed
+                  );
 
                   return (
                     <View key={update.id} style={styles.updateCardWrapper}>
@@ -181,8 +194,8 @@ export default function FamilyScreen() {
                               </ThemedText>
                             </View>
                           </View>
-                          {/* Menu button - only show for own updates */}
-                          {isOwnUpdate && (
+                          {/* Menu button - always show (Report is always available) */}
+                          {menuPermissions.showMenuButton && (
                             <Pressable
                               onPress={() => setMenuUpdateId(update.id)}
                               style={styles.menuButton}
@@ -256,44 +269,69 @@ export default function FamilyScreen() {
                             onPress={() => setMenuUpdateId(null)}
                           >
                             <View style={[styles.menu, { backgroundColor: colors.background }]}>
-                              <Pressable
-                                onPress={() => {
-                                  toggleUpdatePrivacy(update.id);
-                                  setMenuUpdateId(null);
-                                }}
-                                style={styles.menuItem}
-                              >
-                                <MaterialIcons
-                                  name={update.isPublic ? 'lock' : 'lock-open'}
-                                  size={20}
-                                  color={colors.text}
-                                />
-                                <ThemedText style={styles.menuItemText}>
-                                  {update.isPublic ? 'Make Private' : 'Make Public'}
-                                </ThemedText>
-                              </Pressable>
-                              <Pressable
-                                onPress={() => {
-                                  setMenuUpdateId(null);
-                                  setUpdateToEdit(update);
-                                }}
-                                style={styles.menuItem}
-                              >
-                                <MaterialIcons name="edit" size={20} color={colors.text} />
-                                <ThemedText style={styles.menuItemText}>Edit</ThemedText>
-                              </Pressable>
-                              <Pressable
-                                onPress={() => {
-                                  setMenuUpdateId(null);
-                                  setPendingDeleteId(update.id);
-                                }}
-                                style={[styles.menuItem, styles.menuItemDanger]}
-                              >
-                                <MaterialIcons name="delete" size={20} color="#FF3B30" />
-                                <ThemedText style={[styles.menuItemText, { color: '#FF3B30' }]}>
-                                  Delete
-                                </ThemedText>
-                              </Pressable>
+                              {/* For own updates, show privacy and edit options */}
+                              {menuPermissions.canChangeVisibility && (
+                                <Pressable
+                                  onPress={() => {
+                                    toggleUpdatePrivacy(update.id);
+                                    setMenuUpdateId(null);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons
+                                    name={update.isPublic ? 'lock' : 'lock-open'}
+                                    size={20}
+                                    color={colors.text}
+                                  />
+                                  <ThemedText style={styles.menuItemText}>
+                                    {update.isPublic ? 'Make Private' : 'Make Public'}
+                                  </ThemedText>
+                                </Pressable>
+                              )}
+
+                              {menuPermissions.canEdit && (
+                                <Pressable
+                                  onPress={() => {
+                                    setMenuUpdateId(null);
+                                    setUpdateToEdit(update);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons name="edit" size={20} color={colors.text} />
+                                  <ThemedText style={styles.menuItemText}>Edit</ThemedText>
+                                </Pressable>
+                              )}
+
+                              {/* Report option - always available for all updates */}
+                              {menuPermissions.canReport && (
+                                <Pressable
+                                  onPress={() => {
+                                    setReportUpdateId(update.id);
+                                    setMenuUpdateId(null);
+                                    setShowReportModal(true);
+                                  }}
+                                  style={styles.menuItem}
+                                >
+                                  <MaterialIcons name="flag" size={20} color={colors.text} />
+                                  <ThemedText style={styles.menuItemText}>Report</ThemedText>
+                                </Pressable>
+                              )}
+
+                              {/* Delete option - only for own updates */}
+                              {menuPermissions.canDelete && (
+                                <Pressable
+                                  onPress={() => {
+                                    setMenuUpdateId(null);
+                                    setPendingDeleteId(update.id);
+                                  }}
+                                  style={[styles.menuItem, styles.menuItemDanger]}
+                                >
+                                  <MaterialIcons name="delete" size={20} color="#FF3B30" />
+                                  <ThemedText style={[styles.menuItemText, { color: '#FF3B30' }]}>
+                                    Delete
+                                  </ThemedText>
+                                </Pressable>
+                              )}
                             </View>
                           </Pressable>
                         </Modal>
@@ -354,6 +392,28 @@ export default function FamilyScreen() {
             setIsAddingUpdate(false);
             setUpdateToEdit(null);
           }}
+        />
+      )}
+
+      {/* Report Abuse Modal */}
+      {reportUpdateId && (
+        <ReportAbuseModal
+          visible={showReportModal}
+          onClose={() => {
+            setShowReportModal(false);
+            setReportUpdateId(null);
+          }}
+          onSubmit={(reason: ReportReason, description?: string) => {
+            // TODO: Implement report API call
+            console.log('[Family] Report submitted:', {
+              updateId: reportUpdateId,
+              reason,
+              description,
+            });
+            Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+          }}
+          reportType="update"
+          targetId={reportUpdateId}
         />
       )}
     </View>
