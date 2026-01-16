@@ -5,7 +5,7 @@
  * Reuses ProfileFormFields component for consistency.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, Pressable, ScrollView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -17,8 +17,9 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
 import { useSessionStore } from '@/stores/session-store';
 import { ProfileFormFields, ProfileFormData } from '@/components/family-tree/ProfileFormFields';
-import { createEgoProfile } from '@/services/supabase/people-api';
+import { createEgoProfile, COPPAViolationError } from '@/services/supabase/people-api';
 import { calculateAge, isAtLeast13 } from '@/utils/age-utils';
+import { isCOPPABlocked } from '@/utils/coppa-utils';
 
 export default function ProfileSetupScreen() {
   const colorScheme = useColorScheme();
@@ -35,6 +36,38 @@ export default function ProfileSetupScreen() {
     photoUrl: session?.user.photoUrl || undefined,
   });
   const [isSaving, setIsSaving] = useState(false);
+
+  // COPPA Compliance: Check if user is blocked on component mount
+  // Use ref to prevent duplicate checks (race condition prevention)
+  const [isCheckingCOPPA, setIsCheckingCOPPA] = useState(true);
+  const coppaCheckRef = useRef<Promise<boolean> | null>(null);
+
+  useEffect(() => {
+    const checkCOPPA = async () => {
+      if (!userId || coppaCheckRef.current) {
+        return;
+      }
+
+      const checkPromise = isCOPPABlocked(userId);
+      coppaCheckRef.current = checkPromise;
+
+      try {
+        const isBlocked = await checkPromise;
+        if (isBlocked) {
+          // User is COPPA-blocked - redirect immediately
+          router.replace('/(auth)/coppa-blocked');
+          return;
+        }
+      } catch (error) {
+        console.error('[ProfileSetup] Error checking COPPA status:', error);
+        // Continue if check fails (fail open)
+      } finally {
+        setIsCheckingCOPPA(false);
+      }
+    };
+
+    checkCOPPA();
+  }, [userId, router]);
 
   const handleSave = async () => {
     if (!formData.name.trim()) {
@@ -72,6 +105,7 @@ export default function ProfileSetupScreen() {
     setIsSaving(true);
     try {
       // Create ego profile in Supabase (atomic operation)
+      // The API will check COPPA status again as a safety measure (RLS trigger)
       const createdPerson = await createEgoProfile(userId, {
         name: formData.name.trim(),
         birthDate: formData.birthDate, // Required - validated above
@@ -88,6 +122,14 @@ export default function ProfileSetupScreen() {
       router.push('/(onboarding)/location');
     } catch (error: any) {
       console.error('[ProfileSetup] Error creating profile:', error);
+      
+      // COPPA Compliance: Handle COPPA violation errors specially
+      if (error instanceof COPPAViolationError) {
+        // Redirect to COPPA blocked screen
+        router.replace('/(auth)/coppa-blocked');
+        return;
+      }
+      
       Alert.alert(
         'Error',
         error.message || 'Failed to save profile. Please try again.'
@@ -130,7 +172,7 @@ export default function ProfileSetupScreen() {
       <View style={[styles.footer, { borderTopColor: colors.icon }]}>
         <Pressable
           onPress={handleSave}
-          disabled={!canContinue || isSaving}
+          disabled={!canContinue || isSaving || isCheckingCOPPA}
           style={({ pressed }) => [
             styles.continueButton,
             {
@@ -144,7 +186,7 @@ export default function ProfileSetupScreen() {
           ]}
         >
           <ThemedText style={[styles.continueButtonText, { color: '#FFFFFF' }]}>
-            {isSaving ? 'Saving...' : 'Continue'}
+            {isCheckingCOPPA ? 'Checking...' : (isSaving ? 'Saving...' : 'Continue')}
           </ThemedText>
           <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
         </Pressable>

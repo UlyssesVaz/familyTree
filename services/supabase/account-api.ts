@@ -12,11 +12,48 @@ import { handleSupabaseMutation, handleSupabaseQuery } from '@/utils/supabase-er
 import { deleteImage, STORAGE_BUCKETS } from './storage-api';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'expo-crypto';
+import { clearCOPPACache } from '@/utils/coppa-utils';
 
 /**
  * Deletion type options
  */
 export type DeletionType = 'delete_profile' | 'deactivate_profile';
+
+/**
+ * Process COPPA deletion - immediately deletes account and marks as COPPA-blocked
+ * 
+ * This function calls the database function handle_coppa_deletion() which:
+ * - Marks profile as COPPA shadow profile (coppa_deleted = true)
+ * - Sets coppa_blocked flag in auth.users app_metadata
+ * - Clears linked_auth_user_id to disconnect account
+ * 
+ * @param userId - The authenticated user's ID (auth.users.id)
+ * @throws Error if deletion fails
+ */
+export async function processCOPPADeletion(userId: string): Promise<void> {
+  const supabase = getSupabaseClient();
+
+  try {
+    // Call database function to handle COPPA deletion
+    // This function is SECURITY DEFINER and handles both people table and auth.users metadata
+    const { error } = await supabase.rpc('handle_coppa_deletion', {
+      target_user_id: userId,
+    });
+
+    if (error) {
+      console.error('[Account API] Error processing COPPA deletion:', error);
+      throw new Error(`Failed to process COPPA deletion: ${error.message}`);
+    }
+
+    // Clear COPPA cache for this user (so next check is fresh)
+    clearCOPPACache(userId);
+
+    console.log('[Account API] COPPA deletion processed. User is now permanently blocked from re-registration.');
+  } catch (error: any) {
+    console.error('[Account API] Error in processCOPPADeletion:', error);
+    throw error;
+  }
+}
 
 /**
  * Account deletion status

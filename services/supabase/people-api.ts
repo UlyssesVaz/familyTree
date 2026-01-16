@@ -12,7 +12,8 @@ import { handleSupabaseQuery, handleSupabaseMutation, handleDuplicateKeyError } 
 import { uploadPhotoIfLocal } from './shared/photo-upload';
 import { mapPersonRow, type PeopleRow } from './shared/mappers';
 import { calculateAge, isAtLeast13 } from '@/utils/age-utils';
-import { processAccountDeletion } from './account-api';
+import { processAccountDeletion, processCOPPADeletion } from './account-api';
+import { isCOPPABlocked, clearCOPPACache } from '@/utils/coppa-utils';
 
 /**
  * Custom error class for COPPA violations - account deleted
@@ -86,7 +87,14 @@ export async function createEgoProfile(
 ): Promise<Person> {
   const supabase = getSupabaseClient();
   
-  // STEP 0: Check if profile already exists (prevent duplicate creation)
+  // STEP 0: COPPA Compliance - Check if user is blocked from re-registration
+  // This prevents users who were COPPA-deleted from creating new accounts
+  const isBlocked = await isCOPPABlocked(userId);
+  if (isBlocked) {
+    throw new COPPAViolationError('You cannot create an account. Your previous account was permanently closed due to age requirements. You must be at least 13 years old to use this app.');
+  }
+  
+  // STEP 1: Check if profile already exists (prevent duplicate creation)
   const existingProfile = await getUserProfile(userId);
   if (existingProfile) {
     console.warn('[People API] Profile already exists for user, returning existing profile');
@@ -253,13 +261,16 @@ export async function updateEgoProfile(
       // User is under 13 - COPPA violation - delete account immediately
       console.warn('[People API] COPPA violation detected: User age < 13 after birth date update. Deleting account immediately.');
       
-      // Immediately delete account (no grace period for COPPA violations)
+      // Immediately process COPPA deletion (marks as COPPA-blocked to prevent re-registration)
       try {
-        await processAccountDeletion(userId, 'delete_profile');
+        await processCOPPADeletion(userId);
       } catch (deletionError: any) {
         console.error('[People API] Error deleting account after COPPA violation:', deletionError);
         // Continue to throw COPPA error even if deletion fails
       }
+      
+      // Clear COPPA cache to ensure next check sees the block
+      clearCOPPACache(userId);
       
       // Throw special error that frontend can catch to sign out user
       throw new COPPAViolationError('Your account has been deleted due to COPPA compliance. You must be at least 13 years old to use this app.');

@@ -31,7 +31,8 @@
       "package": "com.vaz09.FamilyTreeApp"
     },
     "web": {
-      "output": "static",
+      "output": "single",
+      "bundler": "metro",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -65,6 +66,12 @@
       "eas": {
         "projectId": "0fd96d05-33b1-4b3c-90a1-c6af16d7cee8"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0fd96d05-33b1-4b3c-90a1-c6af16d7cee8"
     }
   }
 }

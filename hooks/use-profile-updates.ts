@@ -17,6 +17,7 @@
 import { useMemo } from 'react';
 import { usePeopleStore } from '@/stores/people-store';
 import { useUpdatesStore } from '@/stores/updates-store';
+import { useBlockedUsersStore } from '@/stores/blocked-users-store';
 import type { Update } from '@/types/family-tree';
 
 export interface UseProfileUpdatesResult {
@@ -57,8 +58,11 @@ export function useProfileUpdates(personId: string | null | undefined): UseProfi
     return updates.map(u => `${u.id}:${u.deletedAt || 'active'}`).sort().join(',');
   });
   
+  // Subscribe to blocked users for reactive filtering
+  const blockedUserIds = useBlockedUsersStore((state) => state.blockedUserIds);
+  
   // Memoize updates to prevent recalculation on every render
-  // updatesMap, updatesMapSize, and updatesHash change when updates change, triggering recalculation
+  // updatesMap, updatesMapSize, updatesHash, and blockedUserIds change when updates/blocks change, triggering recalculation
   // Use getState() inside useMemo to ensure we always get the latest store state
   const updates = useMemo(() => {
     if (!personId) {
@@ -66,9 +70,10 @@ export function useProfileUpdates(personId: string | null | undefined): UseProfi
     }
     // Call getUpdatesForPerson directly from store state to ensure we get fresh data
     // Using getState() ensures we always read the latest state, not a stale closure
+    // Pass blockedUserIds for instant filtering
     const state = useUpdatesStore.getState();
-    return state.getUpdatesForPerson(personId);
-  }, [personId, updatesMap, updatesMapSize, updatesHash]); // All trigger when Map changes
+    return state.getUpdatesForPerson(personId, true, blockedUserIds);
+  }, [personId, updatesMap, updatesMapSize, updatesHash, blockedUserIds]); // All trigger when Map/Blocks change
 
   // Memoize update count
   const updateCount = useMemo(() => {

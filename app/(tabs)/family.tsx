@@ -430,7 +430,10 @@ export default function FamilyScreen() {
                 description,
               });
               
-              Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+              // Immediately hide reported update from local store
+              useUpdatesStore.getState().hideReportedUpdate(reportUpdateId!);
+              
+              Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report. The content has been hidden from your feed.');
             } catch (error: any) {
               console.error('[Family] Error submitting report:', error);
               Alert.alert('Error', 'Failed to submit report. Please try again.');

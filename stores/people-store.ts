@@ -28,6 +28,12 @@ interface PeopleStore {
   
   /** Set people (used by sync) */
   setPeople: (people: Person[]) => void;
+  
+  /** Remove a person from the store (e.g., when blocking a user) */
+  removePerson: (personId: string) => void;
+  
+  /** Remove all people associated with a blocked auth user */
+  removeBlockedUser: (blockedAuthUserId: string) => void;
 }
 
 export const usePeopleStore = create<PeopleStore>((set, get) => ({
@@ -108,5 +114,26 @@ export const usePeopleStore = create<PeopleStore>((set, get) => ({
       peopleMap.set(person.id, person);
     }
     set({ people: peopleMap });
+  },
+
+  removePerson: (personId) => {
+    const { people } = get();
+    const newPeople = new Map(people);
+    newPeople.delete(personId);
+    set({ people: newPeople });
+  },
+
+  removeBlockedUser: (blockedAuthUserId) => {
+    const { people } = get();
+    const newPeople = new Map(people);
+    
+    // Remove all people whose linkedAuthUserId matches the blocked user
+    for (const [personId, person] of people.entries()) {
+      if (person.linkedAuthUserId === blockedAuthUserId) {
+        newPeople.delete(personId);
+      }
+    }
+    
+    set({ people: newPeople });
   },
 }));

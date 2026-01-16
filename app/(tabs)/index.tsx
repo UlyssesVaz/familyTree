@@ -24,6 +24,7 @@ import { useTreeLayout } from '@/hooks/use-tree-layout';
 import { usePeopleStore } from '@/stores/people-store';
 import { useRelationshipsStore } from '@/stores/relationships-store';
 import { useSessionStore } from '@/stores/session-store';
+import { useBlockedUsers } from '@/hooks/use-blocked-users';
 import type { Gender, Person } from '@/types/family-tree';
 
 /**
@@ -39,6 +40,7 @@ function GenerationRow({
   onEgoAddPress,
   onPersonAddPress,
   onPersonPress,
+  blockedUserIds,
 }: { 
   people: Person[];
   isEgo?: boolean;
@@ -47,6 +49,7 @@ function GenerationRow({
   onEgoAddPress?: () => void;
   onPersonAddPress?: (person: Person) => void;
   onPersonPress?: (person: Person) => void;
+  blockedUserIds: Set<string>;
 }) {
   const getPerson = usePeopleStore((state) => state.getPerson);
   const getSiblings = useRelationshipsStore((state) => state.getSiblings);
@@ -71,6 +74,7 @@ function GenerationRow({
                   onPress={() => onPersonPress?.(spouse)}
                   onAddPress={() => onPersonAddPress?.(spouse)}
                   showAddButton={true}
+                  isBlocked={spouse.linkedAuthUserId ? blockedUserIds.has(spouse.linkedAuthUserId) : false}
                 />
               </View>
             ))}
@@ -105,6 +109,7 @@ function GenerationRow({
                       onPress={() => onPersonPress?.(sibling)}
                       onAddPress={() => onPersonAddPress?.(sibling)}
                       showAddButton={true}
+                      isBlocked={sibling.linkedAuthUserId ? blockedUserIds.has(sibling.linkedAuthUserId) : false}
                     />
                   </View>
                   {siblingSpouses.length > 0 && (
@@ -117,6 +122,7 @@ function GenerationRow({
                             onPress={() => onPersonPress?.(spouse)}
                             onAddPress={() => onPersonAddPress?.(spouse)}
                             showAddButton={true}
+                            isBlocked={spouse.linkedAuthUserId ? blockedUserIds.has(spouse.linkedAuthUserId) : false}
                           />
                         </View>
                       ))}
@@ -153,6 +159,7 @@ function GenerationRow({
                       onPress={() => onPersonPress?.(spouse)}
                       onAddPress={() => onPersonAddPress?.(spouse)}
                       showAddButton={true}
+                      isBlocked={spouse.linkedAuthUserId ? blockedUserIds.has(spouse.linkedAuthUserId) : false}
                     />
                   </View>
                 ))}
@@ -166,6 +173,7 @@ function GenerationRow({
                 onPress={() => onPersonPress?.(person)}
                 onAddPress={() => onPersonAddPress?.(person)}
                 showAddButton={true}
+                isBlocked={person.linkedAuthUserId ? blockedUserIds.has(person.linkedAuthUserId) : false}
               />
             </View>
           </View>
@@ -186,6 +194,9 @@ export default function HomeScreen() {
   // Use the custom hook to get all tree layout calculations
   // This hook encapsulates all the complex tree traversal logic
   const { ancestorGenerations, descendantGenerations, spouses, siblings, ego } = useTreeLayout(egoId);
+  
+  // Get blocked user IDs for styling (show greyed out instead of hiding)
+  const blockedUserIds = useBlockedUsers();
   
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
@@ -387,6 +398,7 @@ export default function HomeScreen() {
             <View key={`ancestor-gen-${index}`} style={styles.generationSection}>
               <GenerationRow 
                 people={generation}
+                blockedUserIds={blockedUserIds}
                 onPersonAddPress={handleAddPress}
                 onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
               />
@@ -398,6 +410,7 @@ export default function HomeScreen() {
             people={[]}
             isEgo={true}
             egoPerson={ego}
+            blockedUserIds={blockedUserIds}
             onEgoPress={handleEgoCardPress}
             onEgoAddPress={() => handleAddPress(ego)}
             onPersonAddPress={handleAddPress}
@@ -409,6 +422,7 @@ export default function HomeScreen() {
             <View key={`descendant-gen-${index}`} style={styles.generationSection}>
               <GenerationRow 
                 people={generation}
+                blockedUserIds={blockedUserIds}
                 onPersonAddPress={handleAddPress}
                 onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
               />

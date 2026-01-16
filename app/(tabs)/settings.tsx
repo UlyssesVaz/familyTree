@@ -115,6 +115,11 @@ export default function SettingsScreen() {
         {/* Privacy & Security Section */}
         <SettingsSection title="Privacy & Security">
           <SettingsItem
+            icon="block"
+            label="Blocked Users"
+            onPress={() => router.push('/blocked-users')}
+          />
+          <SettingsItem
             icon="privacy-tip"
             label="Privacy Policy"
             onPress={() => router.push('/privacy-policy')}

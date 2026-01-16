@@ -25,6 +25,7 @@ import type { Person, Update } from '@/types/family-tree';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
 import { blockUser, unblockUser, getBlock } from '@/services/supabase/blocks-api';
+import { useBlockedUsersStore } from '@/stores/blocked-users-store';
 
 export default function PersonProfileModal() {
   const insets = useSafeAreaInsets();
@@ -117,24 +118,45 @@ export default function PersonProfileModal() {
   }
 
   // Check if user is blocked (only for non-ego profiles with linked auth users)
+  // Use store for instant updates, sync with backend for consistency
   useEffect(() => {
-    const checkBlockStatus = async () => {
-      if (!session?.user?.id || isEgo || !person.linkedAuthUserId) {
-        setIsCheckingBlock(false);
-        return;
-      }
+    if (!session?.user?.id || isEgo || !person.linkedAuthUserId) {
+      setIsBlocked(false);
+      setIsCheckingBlock(false);
+      return;
+    }
 
+    // Use store for instant block status (reactive)
+    const isBlockedInStore = useBlockedUsersStore.getState().isBlocked(person.linkedAuthUserId);
+    setIsBlocked(isBlockedInStore);
+    setIsCheckingBlock(false);
+    
+    // Sync with backend in background (for consistency, but don't wait)
+    const checkBlockStatus = async () => {
       try {
         const block = await getBlock(session.user.id, person.linkedAuthUserId);
-        setIsBlocked(!!block);
+        const isActuallyBlocked = !!block;
+        setIsBlocked(isActuallyBlocked);
+        
+        // Sync store if backend says different
+        if (isActuallyBlocked && !isBlockedInStore) {
+          useBlockedUsersStore.getState().addBlockedUser(person.linkedAuthUserId);
+        } else if (!isActuallyBlocked && isBlockedInStore) {
+          useBlockedUsersStore.getState().removeBlockedUser(person.linkedAuthUserId);
+        }
       } catch (error) {
         console.error('[PersonProfile] Error checking block status:', error);
-      } finally {
-        setIsCheckingBlock(false);
       }
     };
 
     checkBlockStatus();
+    
+    // Subscribe to store changes for reactive updates
+    const unsubscribe = useBlockedUsersStore.subscribe((state) => {
+      setIsBlocked(state.isBlocked(person.linkedAuthUserId));
+    });
+
+    return () => unsubscribe();
   }, [session?.user?.id, person.linkedAuthUserId, isEgo]);
 
   const handleBlockUser = async () => {
@@ -152,14 +174,29 @@ export default function PersonProfileModal() {
           text: 'Block',
           style: 'destructive',
           onPress: async () => {
+            const blockedUserId = person.linkedAuthUserId;
+            
+            // OPTIMISTIC UPDATE: Immediately update local state for instant UI feedback
+            useBlockedUsersStore.getState().addBlockedUser(blockedUserId);
+            setIsBlocked(true);
+            
             try {
-              await blockUser(session.user.id, person.linkedAuthUserId);
-              setIsBlocked(true);
-              Alert.alert('User Blocked', `${person.name} has been blocked. Their content will no longer appear in your feed.`);
+              // Sync with backend in background
+              await blockUser(session.user.id, blockedUserId);
+              
+              // Success - state already updated optimistically
+              Alert.alert('User Blocked', `${person.name} has been blocked. Their content will no longer appear in your feed. You can manage blocked users in Settings.`);
               logStatsigEvent(statsigClient, 'user_blocked', {
-                blocked_user_id: person.linkedAuthUserId,
+                blocked_user_id: blockedUserId,
               });
+              
+              // Navigate back since user is now blocked
+              router.back();
             } catch (error: any) {
+              // REVERT: If backend fails, remove from local state
+              useBlockedUsersStore.getState().removeBlockedUser(blockedUserId);
+              setIsBlocked(false);
+              
               console.error('[PersonProfile] Error blocking user:', error);
               Alert.alert('Error', error.message || 'Failed to block user. Please try again.');
             }
@@ -183,14 +220,26 @@ export default function PersonProfileModal() {
         {
           text: 'Unblock',
           onPress: async () => {
+            const blockedUserId = person.linkedAuthUserId;
+            
+            // OPTIMISTIC UPDATE: Immediately update local state for instant UI feedback
+            useBlockedUsersStore.getState().removeBlockedUser(blockedUserId);
+            setIsBlocked(false);
+            
             try {
-              await unblockUser(session.user.id, person.linkedAuthUserId);
-              setIsBlocked(false);
-              Alert.alert('User Unblocked', `${person.name} has been unblocked.`);
+              // Sync with backend in background
+              await unblockUser(session.user.id, blockedUserId);
+              
+              // Success - state already updated optimistically
+              Alert.alert('User Unblocked', `${person.name} has been unblocked. Their content will now appear in your feed.`);
               logStatsigEvent(statsigClient, 'user_unblocked', {
-                unblocked_user_id: person.linkedAuthUserId,
+                unblocked_user_id: blockedUserId,
               });
             } catch (error: any) {
+              // REVERT: If backend fails, add back to local state
+              useBlockedUsersStore.getState().addBlockedUser(blockedUserId);
+              setIsBlocked(true);
+              
               console.error('[PersonProfile] Error unblocking user:', error);
               Alert.alert('Error', error.message || 'Failed to unblock user. Please try again.');
             }
@@ -692,7 +741,10 @@ export default function PersonProfileModal() {
                 description,
               });
               
-              Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+              // Immediately hide reported update from local store
+              useUpdatesStore.getState().hideReportedUpdate(reportUpdateId!);
+              
+              Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report. The content has been hidden from your feed.');
             } catch (error: any) {
               console.error('[PersonProfile] Error submitting report:', error);
               Alert.alert('Error', 'Failed to submit report. Please try again.');

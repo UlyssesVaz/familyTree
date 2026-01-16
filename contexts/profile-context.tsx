@@ -17,6 +17,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { useSessionStore } from '@/stores/session-store';
 import { getUserProfile } from '@/services/supabase/people-api';
 import type { Person } from '@/types/family-tree';
+import { isCOPPABlocked } from '@/utils/coppa-utils';
 
 interface ProfileContextType {
   profile: Person | null;
@@ -37,6 +38,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
   const initialRoutingDoneRef = useRef(false); // Track if initial routing decision has been made
   const syncFamilyTreeDoneRef = useRef<string | null>(null); // Track if syncFamilyTree has been called for current session
   const previousSessionRef = useRef<typeof session>(null); // Track previous session state for sign-in detection
+  const coppaCheckDoneRef = useRef<string | null>(null); // Track if COPPA check has been done for current user
 
   // Step 5: Handle session change coordination
   // Reset refs when session changes (sign-in or sign-out)
@@ -56,12 +58,13 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       const previousUserId = previousSessionRef.current.user.id;
       const newUserId = session.user.id;
       if (previousUserId !== newUserId) {
-        // Different user logged in - reset sync ref so it syncs for the new user
+        // Different user logged in - reset all refs so checks run for the new user
         syncFamilyTreeDoneRef.current = null;
         initialRoutingDoneRef.current = false;
+        coppaCheckDoneRef.current = null; // Reset COPPA check for new user
         if (__DEV__) {
           // SECURITY: Don't log actual user IDs - just indicate a change occurred
-          console.log('[ProfileContext] Different user logged in, resetting sync ref');
+          console.log('[ProfileContext] Different user logged in, resetting all refs');
         }
       }
     }
@@ -74,6 +77,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       setProfile(null);
       syncFamilyTreeDoneRef.current = null;
       initialRoutingDoneRef.current = false;
+      coppaCheckDoneRef.current = null; // Reset COPPA check on sign out
       if (__DEV__) {
         console.log('[ProfileContext] Session ended, cleared profile and reset refs');
       }
@@ -109,6 +113,30 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingProfile(true);
       
       try {
+        // COPPA Compliance: Check if user is blocked BEFORE checking profile
+        // This prevents COPPA-deleted users from accessing the app at all
+        // Use ref to prevent duplicate checks (race condition prevention)
+        if (coppaCheckDoneRef.current !== currentUserId) {
+          const isBlocked = await isCOPPABlocked(currentUserId);
+          coppaCheckDoneRef.current = currentUserId;
+          
+          if (isBlocked) {
+            // User is COPPA-blocked - redirect to blocked screen immediately
+            if (!initialRoutingDoneRef.current) {
+              initialRoutingDoneRef.current = true;
+              setTimeout(() => {
+                router.replace('/(auth)/coppa-blocked');
+              }, 0);
+            }
+            // Clear profile state
+            useSessionStore.getState().clearEgo();
+            setProfile(null);
+            setIsLoadingProfile(false);
+            profileCheckRef.current = null;
+            return; // Exit early - don't continue with profile check
+          }
+        }
+        
         const userProfile = await getUserProfile(session.user.id);
         
         if (userProfile) {

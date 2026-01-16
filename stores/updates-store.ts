@@ -22,7 +22,7 @@ interface UpdatesStore {
   updateUpdate: (updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[], userId?: string) => Promise<void>;
   
   /** Get all updates for a person (sorted by time, newest first) */
-  getUpdatesForPerson: (personId: string, includeTagged?: boolean) => Update[];
+  getUpdatesForPerson: (personId: string, includeTagged?: boolean, blockedUserIds?: Set<string>) => Update[];
   
   /** Get update count for a person */
   getUpdateCount: (personId: string) => number;
@@ -38,6 +38,12 @@ interface UpdatesStore {
   
   /** Set updates (used by sync) */
   setUpdates: (updates: Update[]) => void;
+  
+  /** Remove updates from a blocked user */
+  removeBlockedUserUpdates: (blockedAuthUserId: string) => void;
+  
+  /** Hide a reported update (soft delete for reporter) */
+  hideReportedUpdate: (updateId: string) => void;
 }
 
 export const useUpdatesStore = create<UpdatesStore>((set, get) => ({
@@ -147,12 +153,30 @@ export const useUpdatesStore = create<UpdatesStore>((set, get) => ({
     }
   },
 
-  getUpdatesForPerson: (personId, includeTagged = true) => {
+  getUpdatesForPerson: (personId, includeTagged = true, blockedUserIds = new Set<string>()) => {
     const { updates } = get();
     const people = usePeopleStore.getState().people;
     const person = people.get(personId);
-    const allUpdates = Array.from(updates.values())
+    let allUpdates = Array.from(updates.values())
       .filter(update => !update.deletedAt); // Exclude soft-deleted updates
+    
+    // Filter out updates from blocked users (instant filtering from local state)
+    if (blockedUserIds.size > 0) {
+      allUpdates = allUpdates.filter((update) => {
+        // Check if update creator is blocked
+        if (update.createdBy && blockedUserIds.has(update.createdBy)) {
+          return false;
+        }
+        
+        // Also check by personId -> linkedAuthUserId
+        const updatePerson = people.get(update.personId);
+        if (updatePerson?.linkedAuthUserId && blockedUserIds.has(updatePerson.linkedAuthUserId)) {
+          return false;
+        }
+        
+        return true;
+      });
+    }
     
     // Get updates created by this person
     const ownUpdates = allUpdates.filter(update => {
@@ -332,5 +356,52 @@ export const useUpdatesStore = create<UpdatesStore>((set, get) => ({
       updatesMap.set(update.id, update);
     }
     set({ updates: updatesMap });
+  },
+
+  removeBlockedUserUpdates: (blockedAuthUserId) => {
+    const { updates } = get();
+    const people = usePeopleStore.getState().people;
+    const newUpdates = new Map(updates);
+    
+    // Find the person ID(s) associated with this auth user
+    const blockedPersonIds = new Set<string>();
+    for (const person of people.values()) {
+      if (person.linkedAuthUserId === blockedAuthUserId) {
+        blockedPersonIds.add(person.id);
+      }
+    }
+    
+    // Remove all updates created by this blocked user
+    for (const [updateId, update] of updates.entries()) {
+      // Check if update was created by the blocked user
+      // We need to check by personId since createdBy is auth.user.id
+      if (blockedPersonIds.has(update.personId)) {
+        newUpdates.delete(updateId);
+      } else {
+        // Also check createdBy if available (direct check)
+        const updateCreator = update.createdBy;
+        if (updateCreator === blockedAuthUserId) {
+          newUpdates.delete(updateId);
+        }
+      }
+    }
+    
+    set({ updates: newUpdates });
+  },
+
+  hideReportedUpdate: (updateId) => {
+    const { updates } = get();
+    const update = updates.get(updateId);
+    if (!update) return;
+    
+    // Soft delete the update (similar to deleteUpdate but keep it for reference)
+    const hiddenUpdate: Update = {
+      ...update,
+      deletedAt: Date.now(),
+    };
+    
+    const newUpdates = new Map(updates);
+    newUpdates.set(updateId, hiddenUpdate);
+    set({ updates: newUpdates });
   },
 }));

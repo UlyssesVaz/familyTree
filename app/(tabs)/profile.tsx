@@ -829,14 +829,17 @@ export default function ProfileScreen() {
                   // Map 'other' reason to 'abuse' for API compatibility
                   const apiReason = reason === 'other' ? 'abuse' : reason;
                   
-                  await reportContent(session.user.id, {
-                    reportType: 'update',
-                    targetId: reportUpdateId!,
-                    reason: apiReason as any, // Type assertion needed due to 'other' -> 'abuse' mapping
-                    description,
-                  });
-                  
-                  Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report.');
+              await reportContent(session.user.id, {
+                reportType: 'update',
+                targetId: reportUpdateId!,
+                reason: apiReason as any, // Type assertion needed due to 'other' -> 'abuse' mapping
+                description,
+              });
+              
+              // Immediately hide reported update from local store
+              useUpdatesStore.getState().hideReportedUpdate(reportUpdateId!);
+              
+              Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report. The content has been hidden from your feed.');
                 } catch (error: any) {
                   console.error('[Profile] Error submitting report:', error);
                   Alert.alert('Error', 'Failed to submit report. Please try again.');

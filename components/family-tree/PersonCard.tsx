@@ -21,6 +21,8 @@ interface PersonCardProps {
   onAddPress?: () => void;
   /** Optional: Show + button (default: false) */
   showAddButton?: boolean;
+  /** Optional: Whether this person is blocked (greyed out styling) */
+  isBlocked?: boolean;
 }
 
 /**
@@ -34,13 +36,17 @@ interface PersonCardProps {
  * - Gender indicator (blue for male, orange for female)
  * - Pressable (if onPress is provided)
  */
-export function PersonCard({ person, width = 200, onPress, onAddPress, showAddButton = false }: PersonCardProps) {
+export function PersonCard({ person, width = 200, onPress, onAddPress, showAddButton = false, isBlocked = false }: PersonCardProps) {
   const colorScheme = useColorScheme();
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
 
   const genderColor = getGenderColor(person.gender, colors.icon);
   const dateRange = formatDateRange(person.birthDate, person.deathDate);
+  
+  // Blocked users styling - grey/dimmed appearance
+  const blockedOpacity = isBlocked ? 0.4 : 1;
+  const blockedTextColor = isBlocked ? colors.icon : colors.text;
 
   const cardContent = (
     <>
@@ -71,8 +77,15 @@ export function PersonCard({ person, width = 200, onPress, onAddPress, showAddBu
         </Pressable>
       )}
 
+      {/* Blocked indicator icon */}
+      {isBlocked && (
+        <View style={[styles.blockedIndicator, { backgroundColor: colors.icon + '40' }]}>
+          <MaterialIcons name="block" size={16} color={colors.icon} />
+        </View>
+      )}
+
       {/* Photo or Gender Silhouette */}
-      <View style={styles.photoContainer}>
+      <View style={[styles.photoContainer, { opacity: blockedOpacity }]}>
         {person.photoUrl ? (
           <Image
             source={{ uri: person.photoUrl }}
@@ -93,7 +106,7 @@ export function PersonCard({ person, width = 200, onPress, onAddPress, showAddBu
       {/* Name */}
       <ThemedText
         type="defaultSemiBold"
-        style={[styles.name, { color: colors.text }]}
+        style={[styles.name, { color: blockedTextColor, opacity: blockedOpacity }]}
         numberOfLines={2}
       >
         {person.name}
@@ -102,7 +115,7 @@ export function PersonCard({ person, width = 200, onPress, onAddPress, showAddBu
       {/* Date Range */}
       {dateRange && (
         <ThemedText
-          style={[styles.dates, { color: colors.icon }]}
+          style={[styles.dates, { color: colors.icon, opacity: blockedOpacity }]}
           numberOfLines={1}
         >
           {dateRange}
@@ -118,7 +131,8 @@ export function PersonCard({ person, width = 200, onPress, onAddPress, showAddBu
         {
           width,
           backgroundColor: colors.background,
-          borderColor: colors.icon,
+          borderColor: isBlocked ? colors.icon + '60' : colors.icon,
+          opacity: blockedOpacity,
         },
       ]}
     >
@@ -204,6 +218,17 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.7,
+  },
+  blockedIndicator: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
   },
 });
 
