@@ -13,7 +13,10 @@
       "bundleIdentifier": "com.vaz09.FamilyTreeApp",
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "We need access to your camera to take photos for family tree profiles and updates.",
+        "NSPhotoLibraryUsageDescription": "We need access to your photo library to select photos for family tree profiles and updates.",
+        "NSLocationWhenInUseUsageDescription": "We need access to your location to add location information to family tree profiles."
       }
     },
     "android": {

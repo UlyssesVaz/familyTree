@@ -140,7 +140,19 @@ export default function PrivacyPolicyScreen() {
 
         <ThemedText style={styles.sectionTitle}>11. Contact Us</ThemedText>
         <ThemedText style={styles.paragraph}>
-          If you have questions about this Privacy Policy or our data practices, please contact us through the app settings.
+          If you have questions about this Privacy Policy or our data practices, please contact us:
+        </ThemedText>
+        <ThemedText style={styles.paragraph}>
+          <ThemedText style={styles.bold}>Company:</ThemedText> Cera Tech LLC
+        </ThemedText>
+        <ThemedText style={styles.paragraph}>
+          <ThemedText style={styles.bold}>Email:</ThemedText> ulysses@startceratech.com
+        </ThemedText>
+        <ThemedText style={styles.paragraph}>
+          <ThemedText style={styles.bold}>Address:</ThemedText> 522 W Riverside Ave Ste N, Spokane, WA 99201, United States
+        </ThemedText>
+        <ThemedText style={styles.paragraph}>
+          <ThemedText style={styles.bold}>Website:</ThemedText> startceratech.com
         </ThemedText>
 
         <View style={styles.footer} />
