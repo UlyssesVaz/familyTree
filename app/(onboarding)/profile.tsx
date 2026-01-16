@@ -18,6 +18,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { useSessionStore } from '@/stores/session-store';
 import { ProfileFormFields, ProfileFormData } from '@/components/family-tree/ProfileFormFields';
 import { createEgoProfile } from '@/services/supabase/people-api';
+import { calculateAge, isAtLeast13 } from '@/utils/age-utils';
 
 export default function ProfileSetupScreen() {
   const colorScheme = useColorScheme();
@@ -41,6 +42,28 @@ export default function ProfileSetupScreen() {
       return;
     }
 
+    // COPPA Compliance: Require birth date and validate age >= 13
+    if (!formData.birthDate) {
+      Alert.alert('Birth Date Required', 'Please enter your date of birth to continue.');
+      return;
+    }
+
+    // Validate age (must be at least 13 years old)
+    const age = calculateAge(formData.birthDate);
+    if (age === null) {
+      Alert.alert('Invalid Date', 'Please enter a valid date of birth.');
+      return;
+    }
+
+    if (!isAtLeast13(formData.birthDate)) {
+      Alert.alert(
+        'Age Requirement',
+        'You must be at least 13 years old to create an account. If you made a mistake, please contact support.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     if (!userId) {
       Alert.alert('Error', 'User not authenticated. Please sign in again.');
       return;
@@ -51,7 +74,7 @@ export default function ProfileSetupScreen() {
       // Create ego profile in Supabase (atomic operation)
       const createdPerson = await createEgoProfile(userId, {
         name: formData.name.trim(),
-        birthDate: formData.birthDate || undefined,
+        birthDate: formData.birthDate, // Required - validated above
         gender: formData.gender,
         photoUrl: formData.photoUrl,
         bio: formData.bio,
@@ -74,7 +97,8 @@ export default function ProfileSetupScreen() {
     }
   };
 
-  const canContinue = formData.name.trim().length > 0;
+  // Require name and birth date (COPPA compliance)
+  const canContinue = formData.name.trim().length > 0 && !!formData.birthDate;
 
   return (
     <ThemedView style={styles.container}>

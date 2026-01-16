@@ -126,9 +126,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     isSyncing = true;
     try {
       // Load all people and updates from backend in parallel
+      // Pass userId to getAllUpdates to filter blocked users
       const [peopleFromBackend, updatesFromBackend] = await Promise.all([
         getAllPeople(),
-        getAllUpdates(),
+        getAllUpdates(userId),
       ]);
       
       if (__DEV__) {

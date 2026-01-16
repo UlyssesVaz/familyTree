@@ -188,6 +188,8 @@ export function DatePickerField({
                 }}
                 maximumDate={new Date()}
                 style={styles.iosPicker}
+                // Note: We cannot lock the year picker directly in iOS DateTimePicker
+                // The validation happens in the parent component (EditProfileModal)
               />
             </View>
           )}

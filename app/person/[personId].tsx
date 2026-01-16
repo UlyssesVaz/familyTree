@@ -24,6 +24,7 @@ import { createInvitationLink } from '@/services/supabase/invitations-api';
 import type { Person, Update } from '@/types/family-tree';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
+import { blockUser, unblockUser, getBlock } from '@/services/supabase/blocks-api';
 
 export default function PersonProfileModal() {
   const insets = useSafeAreaInsets();
@@ -57,6 +58,8 @@ export default function PersonProfileModal() {
   const [isAddingUpdate, setIsAddingUpdate] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportUpdateId, setReportUpdateId] = useState<string | null>(null);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [isCheckingBlock, setIsCheckingBlock] = useState(true);
 
   // Use ref to avoid stale closure in useEffect
   const deleteUpdateRef = useRef(useUpdatesStore.getState().deleteUpdate);
@@ -113,6 +116,90 @@ export default function PersonProfileModal() {
     );
   }
 
+  // Check if user is blocked (only for non-ego profiles with linked auth users)
+  useEffect(() => {
+    const checkBlockStatus = async () => {
+      if (!session?.user?.id || isEgo || !person.linkedAuthUserId) {
+        setIsCheckingBlock(false);
+        return;
+      }
+
+      try {
+        const block = await getBlock(session.user.id, person.linkedAuthUserId);
+        setIsBlocked(!!block);
+      } catch (error) {
+        console.error('[PersonProfile] Error checking block status:', error);
+      } finally {
+        setIsCheckingBlock(false);
+      }
+    };
+
+    checkBlockStatus();
+  }, [session?.user?.id, person.linkedAuthUserId, isEgo]);
+
+  const handleBlockUser = async () => {
+    if (!session?.user?.id || !person.linkedAuthUserId) {
+      Alert.alert('Error', 'Unable to block user. Please try again.');
+      return;
+    }
+
+    Alert.alert(
+      'Block User',
+      `Are you sure you want to block ${person.name}? You won't be able to see their content, and they won't be able to see yours.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await blockUser(session.user.id, person.linkedAuthUserId);
+              setIsBlocked(true);
+              Alert.alert('User Blocked', `${person.name} has been blocked. Their content will no longer appear in your feed.`);
+              logStatsigEvent(statsigClient, 'user_blocked', {
+                blocked_user_id: person.linkedAuthUserId,
+              });
+            } catch (error: any) {
+              console.error('[PersonProfile] Error blocking user:', error);
+              Alert.alert('Error', error.message || 'Failed to block user. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleUnblockUser = async () => {
+    if (!session?.user?.id || !person.linkedAuthUserId) {
+      Alert.alert('Error', 'Unable to unblock user. Please try again.');
+      return;
+    }
+
+    Alert.alert(
+      'Unblock User',
+      `Are you sure you want to unblock ${person.name}? You will be able to see their content again.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unblock',
+          onPress: async () => {
+            try {
+              await unblockUser(session.user.id, person.linkedAuthUserId);
+              setIsBlocked(false);
+              Alert.alert('User Unblocked', `${person.name} has been unblocked.`);
+              logStatsigEvent(statsigClient, 'user_unblocked', {
+                unblocked_user_id: person.linkedAuthUserId,
+              });
+            } catch (error: any) {
+              console.error('[PersonProfile] Error unblocking user:', error);
+              Alert.alert('Error', error.message || 'Failed to unblock user. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const ancestorsCount = countAncestors(person.id);
   const descendantsCount = countDescendants(person.id);
 
@@ -131,7 +218,22 @@ export default function PersonProfileModal() {
         <ThemedText type="defaultSemiBold" style={styles.headerTitle}>
           {person.name}
         </ThemedText>
-        <View style={styles.headerSpacer} />
+        {/* Block/Unblock button (only for non-ego profiles with linked auth users) */}
+        {!isEgo && person.linkedAuthUserId && !isCheckingBlock && (
+          <Pressable
+            onPress={isBlocked ? handleUnblockUser : handleBlockUser}
+            style={styles.blockButton}
+          >
+            <MaterialIcons
+              name={isBlocked ? 'block' : 'block'}
+              size={24}
+              color={isBlocked ? colors.tint : '#FF3B30'}
+            />
+          </Pressable>
+        )}
+        {(!person.linkedAuthUserId || isEgo || isCheckingBlock) && (
+          <View style={styles.headerSpacer} />
+        )}
       </View>
 
       <ScrollView 
@@ -625,6 +727,10 @@ const styles = StyleSheet.create({
   },
   headerSpacer: {
     width: 40,
+  },
+  blockButton: {
+    padding: 8,
+    marginRight: 8,
   },
   scrollView: {
     flex: 1,

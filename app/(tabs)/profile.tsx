@@ -24,7 +24,7 @@ import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
 import { useAuth } from '@/contexts/auth-context';
 import { locationService, LocationData } from '@/services/location-service';
 import { uploadImage, STORAGE_BUCKETS } from '@/services/supabase/storage-api';
-import { updateEgoProfile } from '@/services/supabase/people-api';
+import { updateEgoProfile, COPPAViolationError } from '@/services/supabase/people-api';
 import type { Update, Person } from '@/types/family-tree';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
@@ -88,6 +88,31 @@ export default function ProfileScreen() {
       }
     } catch (error: any) {
       console.error('[Profile] Error updating profile:', error);
+      
+      // COPPA Compliance: If account was deleted due to age violation, sign out immediately
+      if (error instanceof COPPAViolationError) {
+        Alert.alert(
+          'Account Deleted',
+          'Your account has been deleted in compliance with COPPA regulations. You must be at least 13 years old to use this app.',
+          [
+            {
+              text: 'OK',
+              onPress: async () => {
+                // Sign out immediately after COPPA violation
+                try {
+                  await signOut();
+                } catch (signOutError) {
+                  console.error('[Profile] Error signing out after COPPA violation:', signOutError);
+                  // Still navigate away even if sign out fails
+                  router.replace('/(auth)/login');
+                }
+              },
+            },
+          ]
+        );
+        return;
+      }
+      
       Alert.alert(
         'Update Failed',
         error.message || 'Failed to update profile. Please try again.'

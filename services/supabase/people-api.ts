@@ -11,6 +11,19 @@ import { STORAGE_BUCKETS } from './storage-api';
 import { handleSupabaseQuery, handleSupabaseMutation, handleDuplicateKeyError } from '@/utils/supabase-error-handler';
 import { uploadPhotoIfLocal } from './shared/photo-upload';
 import { mapPersonRow, type PeopleRow } from './shared/mappers';
+import { calculateAge, isAtLeast13 } from '@/utils/age-utils';
+import { processAccountDeletion } from './account-api';
+
+/**
+ * Custom error class for COPPA violations - account deleted
+ * This error is thrown when a user's age becomes < 13 after birth date update
+ */
+export class COPPAViolationError extends Error {
+  constructor(message: string = 'Account deleted due to COPPA compliance violation') {
+    super(message);
+    this.name = 'COPPAViolationError';
+  }
+}
 
 /**
  * Input type for creating a new person profile
@@ -230,7 +243,30 @@ export async function updateEgoProfile(
     operation: 'update ego profile',
   });
   
-  // STEP 4: Map database response to Person type using shared mapper
+  // STEP 4: COPPA Compliance - Check age after birth date update
+  // If birth date was updated and user is now under 13, immediately delete account
+  if (updates.birthDate !== undefined && result.birth_date) {
+    const birthDate = result.birth_date;
+    const age = calculateAge(birthDate);
+    
+    if (age !== null && !isAtLeast13(birthDate)) {
+      // User is under 13 - COPPA violation - delete account immediately
+      console.warn('[People API] COPPA violation detected: User age < 13 after birth date update. Deleting account immediately.');
+      
+      // Immediately delete account (no grace period for COPPA violations)
+      try {
+        await processAccountDeletion(userId, 'delete_profile');
+      } catch (deletionError: any) {
+        console.error('[People API] Error deleting account after COPPA violation:', deletionError);
+        // Continue to throw COPPA error even if deletion fails
+      }
+      
+      // Throw special error that frontend can catch to sign out user
+      throw new COPPAViolationError('Your account has been deleted due to COPPA compliance. You must be at least 13 years old to use this app.');
+    }
+  }
+  
+  // STEP 5: Map database response to Person type using shared mapper
   // Preserve existing profile relationships and metadata
   return mapPersonRow(result, undefined, existingProfile);
 }

@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { handleSupabaseMutation } from '@/utils/supabase-error-handler';
 import { uploadPhotoIfLocal } from './shared/photo-upload';
 import { mapUpdateRow, type UpdatesRow } from './shared/mappers';
+import { getBlockedUsers } from './blocks-api';
 
 /**
  * Database row type for update_tags table
@@ -202,13 +203,16 @@ export async function getUpdatesForPerson(personId: string): Promise<Update[]> {
  * This function loads all updates from the database, including tags.
  * Used for initial sync when app starts.
  * 
- * IMPORTANT: Filters out updates from users who have requested 'delete_profile' deletion.
- * Updates from 'deactivate_profile' users are kept (their content remains visible).
+ * IMPORTANT: 
+ * - Filters out updates from users who have requested 'delete_profile' deletion.
+ * - Filters out updates from blocked users (bidirectional blocking).
+ * - Updates from 'deactivate_profile' users are kept (their content remains visible).
  * 
+ * @param currentUserId - The authenticated user's ID (auth.users.id) - required for blocking filter
  * @returns Array of all Update objects, sorted by created_at (newest first)
  * @throws Error if query fails
  */
-export async function getAllUpdates(): Promise<Update[]> {
+export async function getAllUpdates(currentUserId?: string): Promise<Update[]> {
   const supabase = getSupabaseClient();
   
   // STEP 1: Get all user IDs who have requested 'delete_profile' deletion
@@ -222,6 +226,17 @@ export async function getAllUpdates(): Promise<Update[]> {
   const deletedUserIds = (deletedUsersData || [])
     .map(p => p.linked_auth_user_id)
     .filter((id): id is string => id !== null);
+  
+  // STEP 1.5: Get blocked user IDs (if currentUserId is provided)
+  let blockedUserIds: string[] = [];
+  if (currentUserId) {
+    try {
+      blockedUserIds = await getBlockedUsers(currentUserId);
+    } catch (error) {
+      console.error('[Updates API] Error fetching blocked users:', error);
+      // Continue without blocking filter if it fails
+    }
+  }
   
   // STEP 2: Query all updates, filtering out updates from deleted users
   let query = supabase
@@ -277,18 +292,33 @@ export async function getAllUpdates(): Promise<Update[]> {
     return mapUpdateRow(row, tagsMap.get(row.updates_id));
   });
   
-  // STEP 4: Defensive filtering - remove updates from users who requested 'delete_profile' deletion
+  // STEP 4: Defensive filtering - remove updates from:
+  // 1. Users who requested 'delete_profile' deletion
+  // 2. Blocked users (bidirectional blocking)
   // Note: Updates from 'deactivate_profile' users are kept (their content remains visible)
   // This is important: 'delete_profile' means hide everything, 'deactivate_profile' means keep content visible
-  if (deletedUserIds.length > 0) {
-    const deletedUserIdsSet = new Set(deletedUserIds);
+  const deletedUserIdsSet = new Set(deletedUserIds);
+  const blockedUserIdsSet = new Set(blockedUserIds);
+  
+  if (deletedUserIds.length > 0 || blockedUserIds.length > 0) {
     updates = updates.filter(update => {
       // Filter out updates created by users who requested 'delete_profile' deletion
       // createdBy is the user ID (from auth.users) who created the update
       if (!update.createdBy) {
         return true; // Keep updates without createdBy (shouldn't happen, but be safe)
       }
-      return !deletedUserIdsSet.has(update.createdBy);
+      
+      // Filter out deleted users
+      if (deletedUserIdsSet.has(update.createdBy)) {
+        return false;
+      }
+      
+      // Filter out blocked users (bidirectional blocking)
+      if (blockedUserIdsSet.has(update.createdBy)) {
+        return false;
+      }
+      
+      return true;
     });
   }
   

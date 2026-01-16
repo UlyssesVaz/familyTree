@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View, Alert } from 'react-native';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
@@ -10,6 +10,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useImagePicker } from '@/hooks/use-image-picker';
 import { DatePickerField } from './DatePickerField';
 import type { Gender, Person } from '@/types/family-tree';
+import { getBirthYear } from '@/utils/age-utils';
 
 interface EditProfileModalProps {
   /** Person to edit (should be ego) */
@@ -36,6 +37,10 @@ export function EditProfileModal({ person, visible, onClose, onSave }: EditProfi
   const [bio, setBio] = useState(person.bio || '');
   const [birthDate, setBirthDate] = useState(person.birthDate || '');
   
+  // COPPA Compliance: Lock birth year after account creation
+  // Extract original birth year to prevent changes
+  const originalBirthYear = person.birthDate ? getBirthYear(person.birthDate) : null;
+  
   // Use image picker hook
   const { photoUri, setPhotoUri, pickImage, removePhoto, reset: resetImage } = useImagePicker(
     person.photoUrl || null,
@@ -55,6 +60,19 @@ export function EditProfileModal({ person, visible, onClose, onSave }: EditProfi
   }, [person, resetImage]); // resetImage is now stable with useCallback
 
   const handleSave = () => {
+    // COPPA Compliance: Validate that birth year hasn't changed
+    if (originalBirthYear && birthDate) {
+      const newBirthYear = getBirthYear(birthDate);
+      if (newBirthYear !== null && newBirthYear !== originalBirthYear) {
+        Alert.alert(
+          'Birth Year Cannot Be Changed',
+          'For security and compliance reasons, your birth year cannot be changed after account creation. You can update the month and day, but the year is locked. If you need to correct your birth year, please contact support.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    }
+
     onSave({
       name: name.trim(),
       bio: bio.trim() || undefined,
@@ -194,11 +212,20 @@ export function EditProfileModal({ person, visible, onClose, onSave }: EditProfi
 
           <DatePickerField
             label="Birth Date"
-              value={birthDate}
+            value={birthDate}
             onChange={setBirthDate}
             placeholder="Select birth date"
-            hint="Format: YYYY-MM-DD (e.g., 2000-01-15)"
+            hint={
+              originalBirthYear
+                ? `Year is locked (${originalBirthYear}) for security. You can update month and day only.`
+                : "Format: YYYY-MM-DD (e.g., 2000-01-15)"
+            }
           />
+          {originalBirthYear && (
+            <ThemedText style={[styles.hint, { color: colors.icon, marginTop: -20, marginBottom: 8 }]}>
+              Note: Birth year cannot be changed after account creation. Contact support if you need to correct it.
+            </ThemedText>
+          )}
         </ScrollView>
       </ThemedView>
     </Modal>
