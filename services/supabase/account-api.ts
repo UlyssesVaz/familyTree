@@ -92,7 +92,7 @@ export async function requestAccountDeletion(
   // This function is SECURITY DEFINER so it can update the people table
   const { data, error } = await supabase.rpc('request_account_deletion', {
     token_input: recoveryToken,
-    deletion_type_input: deletionType,
+    type_input: deletionType, // Note: Database function uses 'type_input', not 'deletion_type_input'
   });
   
   if (error) {
@@ -373,7 +373,33 @@ export async function processAccountDeletion(
     }
   }
   
-  // Note: auth.users deletion must be handled separately via Edge Function
-  // because it requires service_role key or admin privileges
-  console.log('[Account API] Account deletion processed. Auth user deletion must be handled separately.');
+  // Delete from auth.users via Edge Function (requires service_role key)
+  try {
+    console.log(`[Account API] Calling Edge Function to delete auth user: ${userId}`);
+    
+    const { data, error: functionError } = await supabase.functions.invoke('delete-user', {
+      body: { user_id: userId },
+    });
+
+    if (functionError) {
+      console.error('[Account API] Error calling delete-user Edge Function:', functionError);
+      // Log but don't throw - people table is already cleaned up
+      // The auth.users record will be cleaned up by scheduled job if this fails
+      throw new Error(`Failed to delete auth user: ${functionError.message}`);
+    }
+
+    if (data && data.error) {
+      console.error('[Account API] Edge Function returned error:', data.error);
+      // If user not found, that's okay (idempotent)
+      if (!data.error.includes('not found')) {
+        throw new Error(`Failed to delete auth user: ${data.error}`);
+      }
+    }
+
+    console.log('[Account API] Account deletion completed successfully, including auth.users deletion.');
+  } catch (error: any) {
+    // Log the error but note that people table cleanup is already done
+    console.error('[Account API] Error during auth user deletion:', error);
+    throw new Error(`Account data deleted, but auth user deletion failed: ${error.message}`);
+  }
 }
