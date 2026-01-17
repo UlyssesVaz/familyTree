@@ -26,6 +26,8 @@ export interface PeopleRow {
   updated_by?: string | null; // Optional - may not exist in schema
   version?: number; // Optional - may not exist in schema
   linked_auth_user_id?: string | null;
+  deleted_at?: string | null;
+  coppa_deleted?: boolean;
 }
 
 /**
@@ -50,6 +52,7 @@ export interface UpdatesRow {
  * @param row - Database row from people table
  * @param relationships - Optional relationship arrays (if not provided, uses empty arrays)
  * @param existingProfile - Optional existing profile to preserve relationships and metadata
+ * @param options - Optional configuration for placeholder detection
  * @returns Person object
  */
 export function mapPersonRow(
@@ -60,28 +63,83 @@ export function mapPersonRow(
     childIds?: string[];
     siblingIds?: string[];
   },
-  existingProfile?: Person
+  existingProfile?: Person,
+  options?: {
+    blockedUserIds?: Set<string>;
+    currentUserId?: string;
+  }
 ): Person {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'mappers.ts:58',message:'mapPersonRow entry',data:{userId:row.user_id,linkedAuthUserId:row.linked_auth_user_id||'',hasBlockedSet:!!options?.blockedUserIds,blockedSetSize:options?.blockedUserIds?.size||0,hasCurrentUserId:!!options?.currentUserId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,B,C'})}).catch(()=>{});
+  // #endregion
   // Validate required field
   if (!row.user_id) {
     throw new Error('Database response missing user_id');
   }
 
-  // Use relationships from parameter, or existing profile, or empty arrays
+  // Check if this person should be rendered as a placeholder
+  // CRITICAL: Only set placeholder if there's a REAL reason (blocked, deleted, or COPPA-deleted)
+  const deletedAt = row.deleted_at;
+  const isDeleted = deletedAt !== null && deletedAt !== undefined && deletedAt !== '';
+  const coppaDeletedField = (row as any).coppa_deleted;
+  const isCoppaDeleted = coppaDeletedField === true || coppaDeletedField === 1; // Explicit boolean/truthy check
+  
+  const linkedAuthUserId = row.linked_auth_user_id || null; // Use null instead of empty string for clarity
+  const isBlocked = linkedAuthUserId && options?.blockedUserIds ? options.blockedUserIds.has(linkedAuthUserId) : false;
+  
+  const isPlaceholder = isDeleted || isCoppaDeleted || isBlocked;
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'mappers.ts:84',message:'mapPersonRow placeholder check',data:{userId:row.user_id,linkedAuthUserId:linkedAuthUserId||'',deletedAt:deletedAt||'null',isDeleted,coppaDeletedField,isCoppaDeleted,isBlocked,isPlaceholder,hasBlockedSet:!!options?.blockedUserIds,blockedSetSize:options?.blockedUserIds?.size||0,blockedInSet:linkedAuthUserId?(options?.blockedUserIds?.has(linkedAuthUserId)||false):false},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,B,C'})}).catch(()=>{});
+  // #endregion
+  
+  if (__DEV__ && isPlaceholder) {
+    console.log('[Mapper] Creating placeholder person', {
+      userId: row.user_id,
+      linkedAuthUserId,
+      reason: isCoppaDeleted ? 'coppa_deleted' : isBlocked ? 'blocked' : 'deleted',
+      hasBlockedSet: !!options?.blockedUserIds,
+      blockedCount: options?.blockedUserIds?.size || 0,
+    });
+  }
+  
+  // Get relationships (use parameter, existing profile, or empty arrays)
   const parentIds = relationships?.parentIds ?? existingProfile?.parentIds ?? [];
   const spouseIds = relationships?.spouseIds ?? existingProfile?.spouseIds ?? [];
   const childIds = relationships?.childIds ?? existingProfile?.childIds ?? [];
   const siblingIds = relationships?.siblingIds ?? existingProfile?.siblingIds ?? [];
+  
+  if (isPlaceholder) {
+    // Return MINIMAL placeholder person (keeps tree structure intact)
+    const placeholderPerson = {
+      id: row.user_id,
+      name: '', // Empty name for privacy
+      parentIds,
+      spouseIds,
+      childIds,
+      siblingIds,
+      createdAt: new Date(row.created_at).getTime(),
+      updatedAt: new Date(row.updated_at).getTime(),
+      version: 1,
+      isPlaceholder: true,
+      placeholderReason: isCoppaDeleted ? 'coppa_deleted' : isBlocked ? 'blocked' : 'deleted',
+      // ❌ NO bio, photoUrl, phoneNumber, birthDate, deathDate, gender
+    };
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'mappers.ts:101',message:'mapPersonRow returning placeholder',data:{userId:row.user_id,isPlaceholder:placeholderPerson.isPlaceholder,placeholderReason:placeholderPerson.placeholderReason},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
+    // #endregion
+    return placeholderPerson;
+  }
 
-  // Use existing profile metadata if provided, otherwise use row data
+  // Normal person mapping (existing code - keep as is)
   const createdAt = existingProfile?.createdAt ?? new Date(row.created_at).getTime();
   const updatedAt = existingProfile?.updatedAt ?? new Date(row.updated_at).getTime();
   const version = existingProfile?.version 
-    ? ((row.version ?? existingProfile.version) + 1) // Increment if updating
-    : ((row.version ?? 1)); // Default to 1 if new
+    ? ((row.version ?? existingProfile.version) + 1)
+    : ((row.version ?? 1));
 
-  return {
-    id: row.user_id, // Use user_id as Person.id (frontend uses 'id' for consistency)
+  const normalPerson = {
+    id: row.user_id,
     name: row.name,
     birthDate: row.birth_date || undefined,
     deathDate: row.death_date || undefined,
@@ -96,11 +154,15 @@ export function mapPersonRow(
     createdAt,
     updatedAt,
     createdBy: row.created_by || undefined,
-    updatedBy: (row as any).updated_by || undefined, // Optional column
+    updatedBy: (row as any).updated_by || undefined,
     version,
     hiddenTaggedUpdateIds: existingProfile?.hiddenTaggedUpdateIds ?? undefined,
     linkedAuthUserId: row.linked_auth_user_id || undefined,
   };
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'mappers.ts:140',message:'mapPersonRow returning normal person',data:{userId:row.user_id,hasName:!!normalPerson.name,isPlaceholder:normalPerson.isPlaceholder||false},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
+  // #endregion
+  return normalPerson;
 }
 
 /**

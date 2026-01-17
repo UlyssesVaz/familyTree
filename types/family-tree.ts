@@ -78,6 +78,12 @@ export interface Person {
   
   /** Linked auth user ID - distinguishes Living (has linked user) vs Ancestor (null) profiles */
   linkedAuthUserId?: string;
+  
+  /** TRUE if this person should be rendered as a placeholder (blocked/deleted/shadow) */
+  isPlaceholder?: boolean;
+  
+  /** Reason for placeholder: 'blocked' | 'deleted' | 'coppa_deleted' */
+  placeholderReason?: 'blocked' | 'deleted' | 'coppa_deleted';
 }
 
 /**

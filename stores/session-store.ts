@@ -12,6 +12,7 @@ import { getAllPeople } from '@/services/supabase/people-api';
 import { getAllUpdates } from '@/services/supabase/updates-api';
 import { usePeopleStore } from './people-store';
 import { useUpdatesStore } from './updates-store';
+import type { AccountDeletionStatus } from '@/services/supabase/account-api';
 
 interface SessionStore {
   /** ID of the ego (focal person) - null if not initialized */
@@ -22,6 +23,9 @@ interface SessionStore {
   
   /** Error message from last sync attempt, if any */
   syncError: string | null;
+  
+  /** Account deletion status - set when user has pending deletion */
+  deletionStatus: AccountDeletionStatus | null;
   
   /** Initialize the ego (focal person) */
   initializeEgo: (name: string, birthDate?: string, gender?: Person['gender'], userId?: string) => void;
@@ -38,6 +42,9 @@ interface SessionStore {
   /** Clear ego and reset all stores (for sign out) */
   clearEgo: () => void;
   
+  /** Set account deletion status */
+  setDeletionStatus: (status: AccountDeletionStatus | null) => void;
+  
   /** Sync family tree from backend (loads all people and relationships) */
   syncFamilyTree: (userId: string) => Promise<void>;
 }
@@ -46,6 +53,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   egoId: null,
   isSyncing: false,
   syncError: null,
+  deletionStatus: null,
 
   initializeEgo: (name, birthDate, gender, userId) => {
     const id = uuidv4();
@@ -116,10 +124,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // Clear all stores
     usePeopleStore.setState({ people: new Map() });
     useUpdatesStore.setState({ updates: new Map() });
-    set({ egoId: null, isSyncing: false, syncError: null });
+    set({ egoId: null, isSyncing: false, syncError: null, deletionStatus: null });
   },
 
+  setDeletionStatus: (status) => set({ deletionStatus: status }),
+
   syncFamilyTree: async (userId) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'session-store.ts:132',message:'syncFamilyTree entry',data:{userId,isSyncing:get().isSyncing},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,E'})}).catch(()=>{});
+    // #endregion
     // Prevent concurrent sync calls using Zustand state
     if (get().isSyncing) {
       if (__DEV__) {
@@ -133,9 +146,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     
     try {
       // Load all people and updates from backend in parallel
+      // Pass userId to getAllPeople for blocked user detection
       // Pass userId to getAllUpdates to filter blocked users
       const [peopleFromBackend, updatesFromBackend] = await Promise.all([
-        getAllPeople(),
+        getAllPeople(userId), // ← ADD currentUserId parameter
         getAllUpdates(userId),
       ]);
       
@@ -148,6 +162,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         });
       }
       
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'session-store.ts:163',message:'syncFamilyTree updating stores',data:{peopleCount:peopleFromBackend.length,placeholderCount:peopleFromBackend.filter(p=>p.isPlaceholder).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       // Update stores with data from backend
       usePeopleStore.getState().setPeople(peopleFromBackend);
       useUpdatesStore.getState().setUpdates(updatesFromBackend);

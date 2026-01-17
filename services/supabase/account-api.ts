@@ -163,6 +163,10 @@ export async function cancelAccountDeletion(userId: string): Promise<void> {
 export async function getAccountDeletionStatus(userId: string): Promise<AccountDeletionStatus | null> {
   const supabase = getSupabaseClient();
   
+  if (__DEV__) {
+    console.log('[Account API] Checking deletion status for userId:', userId);
+  }
+  
   const { data, error } = await supabase
     .from('people')
     .select('deletion_requested_at, deletion_grace_period_ends_at, deletion_recovery_token, deletion_type')
@@ -172,13 +176,29 @@ export async function getAccountDeletionStatus(userId: string): Promise<AccountD
   if (error) {
     // If no row found, return null (not an error)
     if (error.code === 'PGRST116') {
+      if (__DEV__) {
+        console.log('[Account API] No person record found for userId:', userId);
+      }
       return null;
     }
+    
     console.error('[Account API] Error fetching deletion status:', error);
     throw new Error(`Failed to fetch deletion status: ${error.message}`);
   }
   
+  if (__DEV__) {
+    console.log('[Account API] Person record found:', {
+      hasData: !!data,
+      deletion_requested_at: data?.deletion_requested_at,
+      deletion_grace_period_ends_at: data?.deletion_grace_period_ends_at,
+      deletion_type: data?.deletion_type,
+    });
+  }
+  
   if (!data || !data.deletion_requested_at) {
+    if (__DEV__) {
+      console.log('[Account API] No deletion requested for this user');
+    }
     return null; // No deletion requested
   }
   
@@ -186,11 +206,25 @@ export async function getAccountDeletionStatus(userId: string): Promise<AccountD
     ? new Date(data.deletion_grace_period_ends_at).toISOString()
     : null;
   
+  const now = new Date();
+  const gracePeriodEnd = gracePeriodEndsAt ? new Date(gracePeriodEndsAt) : null;
+  const isInGracePeriod = gracePeriodEnd ? gracePeriodEnd > now : false;
+  
+  if (__DEV__) {
+    console.log('[Account API] Deletion status calculated:', {
+      deletionRequestedAt: data.deletion_requested_at,
+      gracePeriodEndsAt,
+      isInGracePeriod,
+      now: now.toISOString(),
+      gracePeriodEnd: gracePeriodEnd?.toISOString(),
+    });
+  }
+  
   return {
     deletionRequestedAt: data.deletion_requested_at || null,
     gracePeriodEndsAt,
     recoveryToken: data.deletion_recovery_token || null,
-    isInGracePeriod: gracePeriodEndsAt ? new Date(gracePeriodEndsAt) > new Date() : false,
+    isInGracePeriod,
   };
 }
 
@@ -374,11 +408,22 @@ export async function processAccountDeletion(
   }
   
   // Delete from auth.users via Edge Function (requires service_role key)
+  // For user-initiated deletion, we pass the user's JWT token for authorization
   try {
     console.log(`[Account API] Calling Edge Function to delete auth user: ${userId}`);
     
+    // Get the current session to pass the user's JWT token for authorization
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError || !session?.access_token) {
+      console.warn('[Account API] No active session found, Edge Function will need service role key');
+    }
+
     const { data, error: functionError } = await supabase.functions.invoke('delete-user', {
       body: { user_id: userId },
+      headers: session?.access_token ? {
+        'Authorization': `Bearer ${session.access_token}`
+      } : undefined,
     });
 
     if (functionError) {

@@ -68,7 +68,10 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
   }
   
   // Map database row to Person type using shared mapper
-  return mapPersonRow(result);
+  return mapPersonRow(result, undefined, undefined, {
+    blockedUserIds: new Set(),
+    currentUserId: undefined,
+  });
 }
 
 /**
@@ -286,7 +289,10 @@ export async function updateEgoProfile(
   
   // STEP 5: Map database response to Person type using shared mapper
   // Preserve existing profile relationships and metadata
-  return mapPersonRow(result, undefined, existingProfile);
+  return mapPersonRow(result, undefined, existingProfile, {
+    blockedUserIds: new Set(),
+    currentUserId: undefined,
+  });
 }
 
 /**
@@ -348,7 +354,10 @@ export async function createRelative(
   });
   
   // STEP 5: Map database response to Person type using shared mapper
-  return mapPersonRow(result);
+  return mapPersonRow(result, undefined, undefined, {
+    blockedUserIds: new Set(),
+    currentUserId: undefined,
+  });
 }
 
 /**
@@ -357,20 +366,38 @@ export async function createRelative(
  * This function loads all people and their relationships from the database.
  * Used for initial sync when app starts.
  * 
+ * @param currentUserId - Optional current user ID for blocked user detection
  * @returns Array of Person objects with relationships populated
  */
-export async function getAllPeople(): Promise<Person[]> {
+export async function getAllPeople(currentUserId?: string): Promise<Person[]> {
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:372',message:'getAllPeople entry',data:{hasCurrentUserId:!!currentUserId,currentUserId:currentUserId||''},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,C'})}).catch(()=>{});
+  // #endregion
   const supabase = getSupabaseClient();
   
-  // STEP 1: Fetch all people and relationships in parallel for efficiency
-  // This is significantly faster than sequential fetching
-  // IMPORTANT: Filter out people who have requested 'delete_profile' deletion
-  // People with 'deactivate_profile' remain visible (their profile stays in tree)
+  // STEP 1: Fetch blocked user IDs if currentUserId provided
+  let blockedUserIds = new Set<string>();
+  if (currentUserId) {
+    const { data: blocks } = await supabase
+      .from('user_blocks')
+      .select('blocked_id')
+      .eq('blocker_id', currentUserId);
+    
+    if (blocks) {
+      blockedUserIds = new Set(blocks.map(b => b.blocked_id));
+    }
+  }
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:386',message:'getAllPeople blocked users fetched',data:{blockedCount:blockedUserIds.size,blockedIds:Array.from(blockedUserIds)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,C'})}).catch(()=>{});
+  // #endregion
+  
+  // STEP 2: Fetch ALL people and relationships in parallel
+  // ❌ REMOVED: .or('deletion_type.is.null,deletion_type.neq.delete_profile')
+  // ✅ NEW: Fetch everything - placeholders handled in mapper
   const [peopleResponse, relationshipsResponse] = await Promise.all([
     supabase
       .from('people')
-      .select('*')
-      .or('deletion_type.is.null,deletion_type.neq.delete_profile')
+      .select('*') // Select all fields including deleted_at, coppa_deleted
       .order('created_at', { ascending: true }),
     supabase.from('relationships').select('*'),
   ]);
@@ -382,28 +409,28 @@ export async function getAllPeople(): Promise<Person[]> {
     console.log('[People API] getAllPeople: Fetched data', { 
       peopleCount: peopleData?.length || 0,
       relationshipsCount: relationshipsData?.length || 0,
+      blockedCount: blockedUserIds.size,
     });
   }
 
-  // Handle people fetch error (must throw if error)
+  // Handle people fetch error
   if (peopleError) {
     handleSupabaseMutation(peopleData, peopleError, {
       apiName: 'People API',
       operation: 'fetch people',
     });
-    return []; // Never reached, but satisfies TypeScript
+    return [];
   }
 
   if (!peopleData || peopleData.length === 0) {
-    return []; // No people in database yet
+    return [];
   }
 
-  // Handle relationships fetch error (non-fatal - continue without relationships)
+  // Handle relationships fetch error (non-fatal)
   if (relationshipsError) {
     if (__DEV__) {
       console.warn('[People API] Error fetching relationships (non-fatal):', relationshipsError);
     }
-    // Don't fail - continue without relationships (can be loaded separately)
   }
   
   // STEP 3: Build relationship maps for efficient lookup
@@ -472,18 +499,24 @@ export async function getAllPeople(): Promise<Person[]> {
     }
   }
   
-  // STEP 4: Map database rows to Person objects with relationships using shared mapper
+  // STEP 4: Map with placeholder detection
   const people: Person[] = peopleData
-    .filter((row) => row.user_id != null) // Filter out rows without user_id
+    .filter((row) => row.user_id != null)
     .map((row) => {
-      const personId = row.user_id!; // We know it's not null from filter above
+      const personId = row.user_id!;
       
       return mapPersonRow(row, {
         parentIds: parentMap.get(personId) || [],
         spouseIds: spouseMap.get(personId) || [],
         childIds: childMap.get(personId) || [],
         siblingIds: siblingMap.get(personId) || [],
+      }, undefined, {
+        blockedUserIds,      // ← NEW: Pass blocked users
+        currentUserId,       // ← NEW: Pass current user
       });
     });
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:510',message:'getAllPeople returning people',data:{totalCount:people.length,placeholderCount:people.filter(p=>p.isPlaceholder).length,normalCount:people.filter(p=>!p.isPlaceholder).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
   return people;
 }

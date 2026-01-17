@@ -13,6 +13,7 @@ export default function AuthLayout() {
       <Stack.Screen name="login" />
       <Stack.Screen name="callback" />
       <Stack.Screen name="coppa-blocked" />
+      <Stack.Screen name="account-recovery" />
     </Stack>
   );
 }

@@ -197,6 +197,13 @@ export default function HomeScreen() {
   
   // Get blocked user IDs for styling (show greyed out instead of hiding)
   const blockedUserIds = useBlockedUsers();
+  // #region agent log
+  useEffect(() => {
+    const people = usePeopleStore.getState().people;
+    const placeholderPeople = Array.from(people.values()).filter(p => p.isPlaceholder);
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:199',message:'index.tsx store check',data:{totalPeople:people.size,placeholderCount:placeholderPeople.length,blockedSetSize:blockedUserIds.size,blockedIds:Array.from(blockedUserIds)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,B'})}).catch(()=>{});
+  }, [blockedUserIds, ancestorGenerations]);
+  // #endregion
   
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
@@ -216,6 +223,14 @@ export default function HomeScreen() {
   const handleEgoCardPress = () => {
     // Navigate to profile tab when ego card is clicked
     router.push('/profile');
+  };
+
+  const handlePersonPress = (person: Person) => {
+    // Prevent navigation for placeholders (blocked/deleted/COPPA-deleted users)
+    if (person.isPlaceholder) {
+      return; // No navigation - placeholder profiles are not accessible
+    }
+    router.push({ pathname: '/person/[personId]', params: { personId: person.id } });
   };
 
   const handleAddPress = (person?: Person) => {
@@ -400,7 +415,7 @@ export default function HomeScreen() {
                 people={generation}
                 blockedUserIds={blockedUserIds}
                 onPersonAddPress={handleAddPress}
-                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
+                onPersonPress={handlePersonPress}
               />
             </View>
           ))}
@@ -414,7 +429,7 @@ export default function HomeScreen() {
             onEgoPress={handleEgoCardPress}
             onEgoAddPress={() => handleAddPress(ego)}
             onPersonAddPress={handleAddPress}
-            onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
+            onPersonPress={handlePersonPress}
           />
 
           {/* Descendant Generations (Below Ego) - Recursively display all child generations */}
@@ -424,7 +439,7 @@ export default function HomeScreen() {
                 people={generation}
                 blockedUserIds={blockedUserIds}
                 onPersonAddPress={handleAddPress}
-                onPersonPress={(person) => router.push({ pathname: '/person/[personId]', params: { personId: person.id } })}
+                onPersonPress={handlePersonPress}
               />
             </View>
           ))}

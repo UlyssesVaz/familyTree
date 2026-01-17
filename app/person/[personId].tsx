@@ -103,24 +103,18 @@ export default function PersonProfileModal() {
     }
   }, [pendingDeleteId, menuUpdateId]);
 
-  // If no person found, show error
-  if (!person) {
-    return (
-      <View style={[styles.wrapper, { backgroundColor: colors.background, paddingTop: insets.top }]}>
-        <ThemedView style={styles.container}>
-          <ThemedText>Person not found</ThemedText>
-          <Pressable onPress={() => router.back()} style={styles.backButton}>
-            <ThemedText style={{ color: colors.tint }}>Go Back</ThemedText>
-          </Pressable>
-        </ThemedView>
-      </View>
-    );
-  }
+  // If person is a placeholder (blocked/deleted/COPPA-deleted), redirect back
+  // Placeholders should not be accessible - they're only visual shadows in the tree
+  useEffect(() => {
+    if (person?.isPlaceholder) {
+      router.back();
+    }
+  }, [person?.isPlaceholder, router]);
 
   // Check if user is blocked (only for non-ego profiles with linked auth users)
-  // Use store for instant updates, sync with backend for consistency
+  // CRITICAL: This hook must be BEFORE early returns to follow Rules of Hooks
   useEffect(() => {
-    if (!session?.user?.id || isEgo || !person.linkedAuthUserId) {
+    if (!session?.user?.id || isEgo || !person?.linkedAuthUserId) {
       setIsBlocked(false);
       setIsCheckingBlock(false);
       return;
@@ -157,7 +151,33 @@ export default function PersonProfileModal() {
     });
 
     return () => unsubscribe();
-  }, [session?.user?.id, person.linkedAuthUserId, isEgo]);
+  }, [session?.user?.id, person?.linkedAuthUserId, isEgo]);
+
+  // If no person found, show error
+  // CRITICAL: All hooks must be called BEFORE any early returns
+  if (!person) {
+    return (
+      <View style={[styles.wrapper, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+        <ThemedView style={styles.container}>
+          <ThemedText>Person not found</ThemedText>
+          <Pressable onPress={() => router.back()} style={styles.backButton}>
+            <ThemedText style={{ color: colors.tint }}>Go Back</ThemedText>
+          </Pressable>
+        </ThemedView>
+      </View>
+    );
+  }
+
+  // If person is a placeholder, show minimal view while redirecting
+  if (person.isPlaceholder) {
+    return (
+      <View style={[styles.wrapper, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+        <ThemedView style={styles.container}>
+          <ThemedText>This profile is not available</ThemedText>
+        </ThemedView>
+      </View>
+    );
+  }
 
   const handleBlockUser = async () => {
     if (!session?.user?.id || !person.linkedAuthUserId) {
@@ -176,16 +196,42 @@ export default function PersonProfileModal() {
           onPress: async () => {
             const blockedUserId = person.linkedAuthUserId;
             
-            // OPTIMISTIC UPDATE: Immediately update local state for instant UI feedback
+            // STEP 1: OPTIMISTIC UPDATE - Mark person as placeholder in PeopleStore
+            // This makes them appear as grey circle immediately (not opacity greying)
+            const people = usePeopleStore.getState().people;
+            let originalPersonName: string | undefined;
+            
+            for (const [personId, existingPerson] of people.entries()) {
+              if (existingPerson.linkedAuthUserId === blockedUserId) {
+                // Preserve original name for error recovery
+                originalPersonName = existingPerson.name;
+                
+                const placeholderPerson: Person = {
+                  ...existingPerson,
+                  isPlaceholder: true,
+                  placeholderReason: 'blocked',
+                  name: '', // Clear name for privacy
+                  // Keep relationships intact for tree structure
+                };
+                usePeopleStore.getState().updatePerson(placeholderPerson);
+                break;
+              }
+            }
+            
+            // STEP 2: OPTIMISTIC UPDATE - Remove updates from blocked user
+            // This makes their posts disappear immediately from the feed
+            useUpdatesStore.getState().removeBlockedUserUpdates(blockedUserId);
+            
+            // STEP 3: OPTIMISTIC UPDATE - Update blocked users store
             useBlockedUsersStore.getState().addBlockedUser(blockedUserId);
             setIsBlocked(true);
             
             try {
-              // Sync with backend in background
+              // STEP 4: Sync with backend in background
               await blockUser(session.user.id, blockedUserId);
               
               // Success - state already updated optimistically
-              Alert.alert('User Blocked', `${person.name} has been blocked. Their content will no longer appear in your feed. You can manage blocked users in Settings.`);
+              Alert.alert('User Blocked', `${originalPersonName || person.name} has been blocked. Their content will no longer appear in your feed. You can manage blocked users in Settings.`);
               logStatsigEvent(statsigClient, 'user_blocked', {
                 blocked_user_id: blockedUserId,
               });
@@ -193,7 +239,22 @@ export default function PersonProfileModal() {
               // Navigate back since user is now blocked
               router.back();
             } catch (error: any) {
-              // REVERT: If backend fails, remove from local state
+              // REVERT: If backend fails, restore person and remove from blocked list
+              const people = usePeopleStore.getState().people;
+              for (const [personId, existingPerson] of people.entries()) {
+                if (existingPerson.linkedAuthUserId === blockedUserId) {
+                  // Restore original person data with preserved name
+                  const restoredPerson: Person = {
+                    ...existingPerson,
+                    isPlaceholder: false,
+                    placeholderReason: undefined,
+                    name: originalPersonName || person.name, // Restore original name
+                  };
+                  usePeopleStore.getState().updatePerson(restoredPerson);
+                  break;
+                }
+              }
+              
               useBlockedUsersStore.getState().removeBlockedUser(blockedUserId);
               setIsBlocked(false);
               

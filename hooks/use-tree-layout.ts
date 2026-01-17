@@ -50,12 +50,13 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
   // The people Map reference changes on every update, but size only changes when people are added/removed
   const peopleSize = usePeopleStore((state) => state.people.size);
   
-  // CRITICAL FIX: Track relationship changes, not just people size
+  // CRITICAL FIX: Track relationship changes AND placeholder changes
   // When relationships are added, peopleSize doesn't change, but relationship arrays do
-  // We need to recalculate when relationships change
-  // Use a stable hash that only changes when relationships actually change
+  // When isPlaceholder changes (block/unblock), peopleSize doesn't change either
+  // We need to recalculate when relationships OR placeholder flags change
+  // Use a stable hash that detects both relationship and placeholder changes
   const relationshipsHash = usePeopleStore((state) => {
-    // Create a stable hash string of all relationship IDs to detect changes
+    // Create a stable hash string of all relationship IDs AND placeholder flags
     // Sorting ensures stable hash even if order changes
     const allRelationshipIds: string[] = [];
     for (const person of state.people.values()) {
@@ -64,6 +65,8 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       allRelationshipIds.push(`${person.id}:children:${person.childIds.length}:${person.childIds.sort().join(',')}`);
       allRelationshipIds.push(`${person.id}:spouses:${person.spouseIds.length}:${person.spouseIds.sort().join(',')}`);
       allRelationshipIds.push(`${person.id}:siblings:${person.siblingIds.length}:${person.siblingIds.sort().join(',')}`);
+      // CRITICAL: Include isPlaceholder flag so tree recalculates when blocking/unblocking
+      allRelationshipIds.push(`${person.id}:placeholder:${person.isPlaceholder ? 'true' : 'false'}`);
     }
     // Sort to ensure stable hash
     const hashString = allRelationshipIds.sort().join('|');

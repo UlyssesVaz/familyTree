@@ -34,6 +34,9 @@ interface PeopleStore {
   
   /** Remove all people associated with a blocked auth user */
   removeBlockedUser: (blockedAuthUserId: string) => void;
+  
+  /** Update a person in the store (e.g., replace placeholder with real data when unblocking) */
+  updatePerson: (person: Person) => void;
 }
 
 export const usePeopleStore = create<PeopleStore>((set, get) => ({
@@ -134,6 +137,13 @@ export const usePeopleStore = create<PeopleStore>((set, get) => ({
       }
     }
     
+    set({ people: newPeople });
+  },
+  
+  updatePerson: (person: Person) => {
+    const { people } = get();
+    const newPeople = new Map(people);
+    newPeople.set(person.id, person);
     set({ people: newPeople });
   },
 }));

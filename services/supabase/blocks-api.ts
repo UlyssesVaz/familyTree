@@ -165,6 +165,61 @@ export async function getBlockedUsers(blockerId: string): Promise<string[]> {
 }
 
 /**
+ * Get blocked users with their person profile information
+ * 
+ * Fetches blocked users directly from the database (not from PeopleStore)
+ * because PeopleStore may have placeholder data (empty names) for blocked users.
+ * 
+ * @param blockerId - The authenticated user's ID (auth.users.id)
+ * @returns Array of blocked user info with name and photoUrl
+ */
+export async function getBlockedUsersWithInfo(blockerId: string): Promise<Array<{
+  userId: string; // auth.users.id (linkedAuthUserId)
+  personId: string; // people.user_id
+  name: string;
+  photoUrl?: string;
+}>> {
+  const supabase = getSupabaseClient();
+
+  // Fetch blocked user IDs
+  const { data: blocksData, error: blocksError } = await supabase
+    .from('user_blocks')
+    .select('blocked_id')
+    .eq('blocker_id', blockerId);
+
+  if (blocksError) {
+    console.error('[Blocks API] Error fetching blocked users:', blocksError);
+    return [];
+  }
+
+  if (!blocksData || blocksData.length === 0) {
+    return [];
+  }
+
+  const blockedUserIds = blocksData.map((row) => row.blocked_id);
+
+  // Fetch person profiles for blocked users directly from database
+  // Use linked_auth_user_id to find the person records
+  const { data: peopleData, error: peopleError } = await supabase
+    .from('people')
+    .select('user_id, name, photo_url, linked_auth_user_id')
+    .in('linked_auth_user_id', blockedUserIds);
+
+  if (peopleError) {
+    console.error('[Blocks API] Error fetching blocked users profiles:', peopleError);
+    return [];
+  }
+
+  // Map to return format
+  return (peopleData || []).map((person) => ({
+    userId: person.linked_auth_user_id!,
+    personId: person.user_id,
+    name: person.name || 'Unknown User',
+    photoUrl: person.photo_url || undefined,
+  }));
+}
+
+/**
  * Check if two users have a blocking relationship (bidirectional)
  * 
  * Returns true if either user has blocked the other.
