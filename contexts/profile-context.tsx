@@ -87,9 +87,11 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
   // Steps 2-4: Check user profile after authentication (handles race conditions)
   // CRITICAL: Use session?.user?.id instead of entire session object to prevent unnecessary re-runs
   // Only depend on user ID and loading state, not the entire session object
+  const isSyncing = useSessionStore((state) => state.isSyncing);
+  
   useEffect(() => {
-    // Wait for auth to complete before checking profile
-    if (isAuthLoading || !session) {
+    // Wait for auth to complete AND sync to complete before checking profile
+    if (isAuthLoading || !session || isSyncing) {
       return;
     }
 
@@ -219,8 +221,10 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
 
     profileCheckRef.current = checkProfile();
     // NOTE: Use session?.user?.id instead of entire session object to prevent unnecessary re-runs
-    // Only re-run when user ID changes or loading state changes
-  }, [session?.user?.id, isAuthLoading, router]);
+    // Include isSyncing in dependencies so we re-run when sync completes
+    // Remove router from dependencies - it's stable and doesn't need to be in deps
+    // Only re-run when user ID changes, loading state changes, or sync state changes
+  }, [session?.user?.id, isAuthLoading, isSyncing]);
 
   return (
     <ProfileContext.Provider value={{ profile, isLoadingProfile }}>

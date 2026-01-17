@@ -13,12 +13,15 @@ import { getAllUpdates } from '@/services/supabase/updates-api';
 import { usePeopleStore } from './people-store';
 import { useUpdatesStore } from './updates-store';
 
-// Track if syncFamilyTree is currently running to prevent concurrent calls
-let isSyncing = false;
-
 interface SessionStore {
   /** ID of the ego (focal person) - null if not initialized */
   egoId: string | null;
+  
+  /** Whether family tree sync is currently in progress */
+  isSyncing: boolean;
+  
+  /** Error message from last sync attempt, if any */
+  syncError: string | null;
   
   /** Initialize the ego (focal person) */
   initializeEgo: (name: string, birthDate?: string, gender?: Person['gender'], userId?: string) => void;
@@ -41,6 +44,8 @@ interface SessionStore {
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   egoId: null,
+  isSyncing: false,
+  syncError: null,
 
   initializeEgo: (name, birthDate, gender, userId) => {
     const id = uuidv4();
@@ -111,19 +116,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // Clear all stores
     usePeopleStore.setState({ people: new Map() });
     useUpdatesStore.setState({ updates: new Map() });
-    set({ egoId: null });
+    set({ egoId: null, isSyncing: false, syncError: null });
   },
 
   syncFamilyTree: async (userId) => {
-    // Prevent concurrent sync calls
-    if (isSyncing) {
+    // Prevent concurrent sync calls using Zustand state
+    if (get().isSyncing) {
       if (__DEV__) {
         console.log('[SessionStore] syncFamilyTree: Already syncing, skipping duplicate call');
       }
       return;
     }
     
-    isSyncing = true;
+    // Set syncing state and clear any previous errors
+    set({ isSyncing: true, syncError: null });
+    
     try {
       // Load all people and updates from backend in parallel
       // Pass userId to getAllUpdates to filter blocked users
@@ -162,9 +169,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         console.log('[SessionStore] Successfully synced family tree from backend');
       }
     } catch (error: any) {
+      const errorMessage = error?.message || 'Failed to sync family tree';
       console.error('[SessionStore] Error syncing family tree:', error);
+      // Store error in state for components to access
+      set({ syncError: errorMessage });
     } finally {
-      isSyncing = false;
+      // Always reset syncing state, even on error
+      set({ isSyncing: false });
     }
   },
 }));

@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, Pressable, ScrollView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
@@ -20,6 +21,8 @@ import { ProfileFormFields, ProfileFormData } from '@/components/family-tree/Pro
 import { createEgoProfile, COPPAViolationError } from '@/services/supabase/people-api';
 import { calculateAge, isAtLeast13 } from '@/utils/age-utils';
 import { isCOPPABlocked } from '@/utils/coppa-utils';
+
+const PRIVACY_CONSENT_STORAGE_KEY = '@familytree:privacy_consent';
 
 export default function ProfileSetupScreen() {
   const colorScheme = useColorScheme();
@@ -104,6 +107,10 @@ export default function ProfileSetupScreen() {
 
     setIsSaving(true);
     try {
+      // Retrieve privacy consent timestamp from AsyncStorage (set during age gate)
+      const privacyConsent = await AsyncStorage.getItem(PRIVACY_CONSENT_STORAGE_KEY);
+      const privacyPolicyAcceptedAt = privacyConsent === 'true' ? new Date().toISOString() : undefined;
+
       // Create ego profile in Supabase (atomic operation)
       // The API will check COPPA status again as a safety measure (RLS trigger)
       const createdPerson = await createEgoProfile(userId, {
@@ -112,6 +119,7 @@ export default function ProfileSetupScreen() {
         gender: formData.gender,
         photoUrl: formData.photoUrl,
         bio: formData.bio,
+        privacyPolicyAcceptedAt, // Store privacy policy acceptance timestamp
       });
 
       // Load the created person into Zustand store

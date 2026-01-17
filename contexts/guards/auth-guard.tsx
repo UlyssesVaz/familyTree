@@ -24,10 +24,11 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { session, isLoading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  const isSyncing = useSessionStore((state) => state.isSyncing);
 
   useEffect(() => {
-    // Wait for auth check to complete
-    if (isLoading) {
+    // Wait for auth check AND sync to complete before making routing decisions
+    if (isLoading || isSyncing) {
       return;
     }
 
@@ -37,16 +38,17 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     const inOnboardingGroup = firstSegment === '(onboarding)';
 
     if (!session) {
-      // NOT AUTHENTICATED: Must go to login first
+      // NOT AUTHENTICATED: Must go to age gate first (COPPA compliance)
       // Clear any stale ego data when not authenticated
       const ego = useSessionStore.getState().getEgo();
       if (ego) {
         useSessionStore.getState().clearEgo();
       }
       
-      // Redirect to login if not already there
+      // Redirect to age gate if not already in auth group (age gate will handle routing to login)
+      // Age gate screen will check AsyncStorage and redirect to login if already passed
       if (!inAuthGroup) {
-        router.replace('/(auth)/login');
+        router.replace('/(auth)/age-gate');
       }
     } else {
       // AUTHENTICATED: Only guard tabs access (security check)
@@ -69,8 +71,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       }
       // Otherwise, let them navigate freely (onboarding flow, etc.)
     }
-    // Only depend on session and isLoading - segments accessed inside effect to avoid constant re-runs
-  }, [session, isLoading, router]);
+    // Include isSyncing in dependencies so guard waits for sync completion
+    // Only depend on session, isLoading, and isSyncing - segments accessed inside effect to avoid constant re-runs
+  }, [session, isLoading, isSyncing, router]);
 
   return <>{children}</>;
 }

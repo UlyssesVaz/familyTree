@@ -36,6 +36,7 @@ export interface CreatePersonInput {
   photoUrl?: string; // Can be local file:// URI or remote URL
   bio?: string;
   phoneNumber?: string;
+  privacyPolicyAcceptedAt?: string; // ISO 8601 timestamp (YYYY-MM-DDTHH:mm:ssZ) - when user accepted privacy policy
 }
 
 /**
@@ -113,7 +114,7 @@ export async function createEgoProfile(
   // STEP 2: Prepare database row (map TypeScript types to PostgreSQL schema)
   // NOTE: user_id is now DB-generated (gen_random_uuid()), not manually set
   // NOTE: linked_auth_user_id is the bridge to Supabase Auth (userId from auth.users)
-  const row = {
+  const row: any = {
     // REMOVED: user_id - Let database generate it automatically
     name: input.name.trim(),
     birth_date: input.birthDate || null,
@@ -127,6 +128,12 @@ export async function createEgoProfile(
     // Note: updated_by and version columns don't exist in current schema
     // Add them here if you add the columns to your database
   };
+  
+  // COPPA Compliance: Store privacy policy acceptance timestamp if provided
+  // This field may not exist in all database schemas, so we conditionally include it
+  if (input.privacyPolicyAcceptedAt) {
+    row.privacy_policy_accepted_at = input.privacyPolicyAcceptedAt;
+  }
   
   // STEP 3: Insert into database (atomic operation)
   let { data, error } = await supabase

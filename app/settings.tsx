@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Alert, View, Pressable } from 'react-native';
+import { ScrollView, StyleSheet, Alert, View, Pressable, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -13,8 +13,11 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useColorSchemeContext } from '@/contexts/color-scheme-context';
 import { useAuth } from '@/contexts/auth-context';
+import { useError } from '@/contexts/error-context';
 import { AccountDeletionModal, type DeletionOption } from '@/components/family-tree';
+import { ExportDataModal } from '@/components/settings/ExportDataModal';
 import { requestAccountDeletion } from '@/services/supabase/account-api';
+import { getExportDataAsJson } from '@/services/export-service';
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -24,7 +27,11 @@ export default function SettingsScreen() {
   const colors = Colors[theme];
   const { colorScheme: currentScheme, setColorScheme } = useColorSchemeContext();
   const { signOut, session } = useAuth();
+  const { showError } = useError();
   const [showAccountDeletionModal, setShowAccountDeletionModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportJsonData, setExportJsonData] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const handleSignOut = () => {
     Alert.alert(
@@ -84,6 +91,30 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleExportData = async () => {
+    if (!session?.user?.id) {
+      showError('You must be signed in to export your data.');
+      return;
+    }
+    
+    setIsExporting(true);
+    setExportJsonData(null);
+    
+    try {
+      // Get JSON data
+      const jsonData = await getExportDataAsJson(session.user.id);
+      
+      // Show modal with JSON data
+      setExportJsonData(jsonData);
+      setShowExportModal(true);
+    } catch (error: any) {
+      console.error('[Settings] Error exporting data:', error);
+      showError(`Failed to export data: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView
@@ -129,6 +160,16 @@ export default function SettingsScreen() {
             label="Terms of Use"
             onPress={() => router.push('/terms-of-use')}
           />
+          <SettingsItem
+            icon="download"
+            label={isExporting ? 'Exporting Data...' : 'Download My Data'}
+            onPress={isExporting ? () => {} : handleExportData}
+            rightElement={
+              isExporting ? (
+                <ActivityIndicator size="small" color={colors.tint} />
+              ) : undefined
+            }
+          />
         </SettingsSection>
 
         {/* Account Section */}
@@ -163,6 +204,16 @@ export default function SettingsScreen() {
         visible={showAccountDeletionModal}
         onClose={() => setShowAccountDeletionModal(false)}
         onConfirm={handleDeleteAccount}
+      />
+
+      {/* Export Data Modal */}
+      <ExportDataModal
+        visible={showExportModal}
+        jsonData={exportJsonData}
+        onClose={() => {
+          setShowExportModal(false);
+          setExportJsonData(null);
+        }}
       />
     </ThemedView>
   );

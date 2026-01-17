@@ -113,6 +113,9 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
       
       // Rollback optimistic update on error
       usePeopleStore.setState({ people: oldPeople });
+      
+      // Throw error so components can catch and show user-friendly message
+      throw new Error(`Failed to save parent relationship: ${error?.message || 'Unknown error'}`);
     }
   },
 
@@ -177,6 +180,7 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
     } catch (error: any) {
       console.error('[RelationshipsStore] Error saving spouse relationship to database:', error);
       usePeopleStore.setState({ people: oldPeople });
+      throw new Error(`Failed to save spouse relationship: ${error?.message || 'Unknown error'}`);
     }
   },
 
@@ -241,6 +245,7 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
     } catch (error: any) {
       console.error('[RelationshipsStore] Error saving child relationship to database:', error);
       usePeopleStore.setState({ people: oldPeople });
+      throw new Error(`Failed to save child relationship: ${error?.message || 'Unknown error'}`);
     }
   },
 
@@ -359,6 +364,7 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
       } catch (error: any) {
         console.error('[RelationshipsStore] Error saving sibling relationship to database:', error);
         usePeopleStore.setState({ people: oldPeople });
+        throw new Error(`Failed to save sibling relationship: ${error?.message || 'Unknown error'}`);
       }
     }
   },

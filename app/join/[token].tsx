@@ -21,6 +21,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
@@ -29,6 +30,8 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
 import GoogleSignInButton from '@/components/auth';
+
+const AGE_GATE_STORAGE_KEY = '@familytree:age_gate_passed';
 import { 
   validateInvitationToken, 
   claimInvitationLink,
@@ -36,6 +39,7 @@ import {
   type InvitationDetails 
 } from '@/services/supabase/invitations-api';
 import { useSessionStore } from '@/stores/session-store';
+import { usePeopleStore } from '@/stores/people-store';
 
 type ScreenState = 
   | 'loading'           // Initial load, validating token
@@ -61,7 +65,7 @@ export default function JoinScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const hasAttemptedClaimRef = useRef(false); // Prevent double-claiming
 
-  // Pre-auth validation using validateInvitationToken
+  // Pre-auth validation using validateInvitationToken + age gate check
   useEffect(() => {
     async function validateToken() {
       if (!token) {
@@ -71,6 +75,15 @@ export default function JoinScreen() {
       }
 
       try {
+        // COPPA Compliance: Check if age gate has been passed
+        // If not, redirect to age gate first (with redirect param to come back here)
+        const ageGatePassed = await AsyncStorage.getItem(AGE_GATE_STORAGE_KEY);
+        if (ageGatePassed !== 'true') {
+          // Age gate not passed - redirect to age gate with redirect param
+          router.replace(`/(auth)/age-gate?redirect=/join/${token}`);
+          return;
+        }
+
         const result = await validateInvitationToken(token);
         
         if (!result.isValid) {
@@ -104,7 +117,7 @@ export default function JoinScreen() {
     }
 
     validateToken();
-  }, [token]);
+  }, [token, router]);
 
   // Handle claiming the profile (after user is authenticated)
   const handleClaimProfile = useCallback(async () => {
@@ -125,9 +138,21 @@ export default function JoinScreen() {
       setScreenState('success');
       
       // Refresh family tree to load the claimed profile
+      // CRITICAL: Wait for sync to complete before navigating
       await useSessionStore.getState().syncFamilyTree(session.user.id);
       
+      // Verify data is loaded before navigating
+      const people = usePeopleStore.getState().people;
+      if (people.size === 0) {
+        console.error('[JoinScreen] Sync completed but no people loaded');
+        setErrorMessage('Failed to load family tree. Please try again.');
+        hasAttemptedClaimRef.current = false; // Allow retry
+        setScreenState('error');
+        return;
+      }
+      
       // Navigate to home after a brief delay to show success state
+      // Sync has completed and data is loaded - safe to navigate
       setTimeout(() => {
         router.replace('/(tabs)');
       }, 1500);

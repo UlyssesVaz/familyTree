@@ -19,7 +19,7 @@ export function HamburgerMenuButton({ style }: HamburgerMenuButtonProps) {
 
   return (
     <Pressable
-      onPress={() => router.push('/(tabs)/settings')}
+      onPress={() => router.push('/settings')}
       style={({ pressed }) => [
         styles.menuButton,
         {

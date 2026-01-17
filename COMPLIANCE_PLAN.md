@@ -12,7 +12,13 @@ This document outlines the compliance requirements for Apple App Store submissio
 - Added account deletion with "Delete Everything" option (permanent blacklist)
 - Added update visibility controls and bulk management
 - Added report functionality in ellipses menus
-- Added permanent deletion prevention (can't recreate deleted shadow profiles)  
+- Added permanent deletion prevention (can't recreate deleted shadow profiles)
+- Added race condition fixes for family tree sync (session-store, profile-context, auth-guard)
+- Added data portability export flow (GDPR compliance)
+- Added neutral age gate flow (COPPA compliance)
+- Added user consent during entry (legal shield for UGC)
+- Added external request flow for web-based removal requests
+- Added proactive notification for shadow profiles with email addresses  
 **Priority:** High (Required for App Store submission)
 
 ---
@@ -813,113 +819,1184 @@ function getMinorProtectionSettings(person: Person): MinorProtectionSettings {
 
 ---
 
+## 🔧 User Experience & Stability Issues
+
+### 7. Race Condition in Family Tree Sync
+
+**Status:** ⚠️ POTENTIAL BUG  
+**Impact:** Family tree not loading for invited users  
+**Priority:** 🟡 Medium (Affects user experience, may cause poor reviews)
+
+**User Report:** "Full family tree not showing up if a different user signs in from invite"
+
+**Root Cause Analysis:**
+
+**Problem 1: Module-level `isSyncing` flag**
+- **Location:** `stores/session-store.ts` line 17
+- **Issue:** `let isSyncing = false;` is a module-level variable, NOT part of Zustand state
+- **Problems:**
+  1. Not reactive - won't trigger re-renders in React components
+  2. Can get stuck as `true` if sync throws unexpectedly
+  3. Shared across all component instances (race condition risk)
+
+**Problem 2: Profile Context Ref Dependencies**
+- **Location:** `contexts/profile-context.tsx` lines 36-41, 104
+- **Issue:** Multiple refs tracking state - complex to debug
+- **Specific Issue (Line 104):** Check prevents re-running but may skip valid re-syncs for invited users:
+  ```typescript
+  if (syncFamilyTreeDoneRef.current === currentUserId && profileCheckRef.current) {
+    return; // May incorrectly skip sync for invited users
+  }
+  ```
+
+**Problem 3: Auth Guard Timing**
+- **Location:** `contexts/guards/auth-guard.tsx` lines 54-65
+- **Issue:** Gets ego SYNCHRONOUSLY but sync is ASYNC
+- **Problem:** If sync not complete, ego may be null even for valid users, causing incorrect redirects
+
+**Implementation Plan:**
+
+**Step 1: Move `isSyncing` into Zustand State**
+- **File:** `stores/session-store.ts`
+- **Action:**
+  1. Add `isSyncing: boolean` to `SessionStore` interface
+  2. Add `syncError: string | null` to track errors
+  3. Remove module-level `let isSyncing = false;`
+  4. Update `syncFamilyTree` to use Zustand state:
+     - Set `isSyncing: true` at start
+     - Set `syncError: null` on start
+     - Set `syncError: error.message` on error
+     - Set `isSyncing: false` in `finally` block
+  5. **Safety:** Check `get().isSyncing` before starting sync (prevents concurrent calls)
+
+**Step 2: Update Profile Context to Wait for Sync**
+- **File:** `contexts/profile-context.tsx`
+- **Action:**
+  1. Import `useSessionStore` hook to access `isSyncing` state
+  2. In profile check useEffect (line 90), add check:
+     - If `isSyncing === true`, wait before proceeding
+     - Use polling or effect dependency on `isSyncing` to re-check when sync completes
+  3. **Alternative:** Wait for `isSyncing` to become `false` before making routing decisions
+  4. **Safety:** Don't skip sync check for invited users - ensure `syncFamilyTreeDoneRef` only prevents duplicate calls, not necessary ones
+
+**Step 3: Update Auth Guard to Wait for Sync**
+- **File:** `contexts/guards/auth-guard.tsx`
+- **Action:**
+  1. Import `useSessionStore` hook
+  2. Get `isSyncing` from store: `const isSyncing = useSessionStore((state) => state.isSyncing)`
+  3. In useEffect (line 28), add early return:
+     ```typescript
+     if (isLoading || isSyncing) return; // Wait for auth AND sync
+     ```
+  4. **Safety:** This prevents auth guard from running before sync completes, avoiding false negatives
+
+**Step 4: Testing**
+- Test invited user flow: Claim invitation → Verify sync completes → Verify tree loads
+- Test race condition: Rapid sign-in/sign-out → Verify no stuck states
+- Test error handling: Simulate sync failure → Verify `syncError` is set and `isSyncing` returns to `false`
+
+---
+
+### 8. Invitation Claim Flow Race Condition
+
+**Status:** ⚠️ POTENTIAL BUG  
+**Impact:** Invited user sees empty family tree  
+**Priority:** 🟡 Medium (Affects user onboarding experience)
+
+**Current Flow:**
+```
+User clicks invite link → app/join/[token].tsx
+User signs in with Google
+claimInvitationLink() called
+syncFamilyTree() called (line 128)
+Navigate to /(tabs) (line 131)
+```
+
+**Problem:** Navigation happens 1500ms after sync STARTS, not after sync COMPLETES.  
+**Location:** `app/join/[token].tsx` lines 125-133
+
+**Issue:**
+```typescript
+setScreenState('success');
+await useSessionStore.getState().syncFamilyTree(session.user.id);
+// ↑ This returns when sync STARTS due to isSyncing check
+setTimeout(() => {
+  router.replace('/(tabs)'); // May navigate before sync completes
+}, 1500);
+```
+
+**Implementation Plan:**
+
+**Step 1: Ensure Sync Completes Before Navigation**
+- **File:** `app/join/[token].tsx`
+- **Action:**
+  1. In `handleClaimProfile` (line 110), after `claimInvitationLink`:
+     - Call `syncFamilyTree` and **wait for completion**
+     - After sync completes, check if data loaded:
+       ```typescript
+       await useSessionStore.getState().syncFamilyTree(session.user.id);
+       
+       // Verify data is loaded before navigating
+       const people = usePeopleStore.getState().people;
+       if (people.size === 0) {
+         console.error('Sync completed but no people loaded');
+         // Option: Retry sync or show error
+       }
+       ```
+  2. **Critical:** Remove `setTimeout` delay OR ensure it's AFTER sync completes
+  3. **Alternative:** Use polling to wait for `isSyncing === false` before navigating
+
+**Step 2: Add Loading State During Sync**
+- **File:** `app/join/[token].tsx`
+- **Action:**
+  1. Add `isSyncing` check from `useSessionStore`
+  2. Show loading spinner while `isSyncing === true`
+  3. Only navigate when `isSyncing === false` AND `people.size > 0`
+
+**Step 3: Error Handling**
+- **File:** `app/join/[token].tsx`
+- **Action:**
+  1. Check `syncError` from store after sync attempt
+  2. If error, show retry button instead of navigating
+  3. Allow user to manually retry sync if it fails
+
+**Step 4: Testing**
+- Test invitation claim flow: Sign in → Claim → Verify tree loads BEFORE navigation
+- Test slow network: Simulate slow sync → Verify navigation waits
+- Test sync failure: Simulate error → Verify user sees error, not empty tree
+
+---
+
+### 9. Profile Context useEffect Dependency Array
+
+**Status:** ⚠️ UNNECESSARY RE-RENDERS  
+**Impact:** Performance, potential infinite loops  
+**Priority:** 🟢 Low (Optimization, not blocking)
+
+**Location:** `contexts/profile-context.tsx` line 223
+
+**Issue:**
+```typescript
+}, [session?.user?.id, isAuthLoading, router]);
+// ↑ router is a stable reference but included anyway
+// Could cause re-runs if router reference changes
+```
+
+**Implementation Plan:**
+
+**Step 1: Remove Router from Dependency Array**
+- **File:** `contexts/profile-context.tsx`
+- **Action:**
+  1. Remove `router` from dependency array (line 223)
+  2. **Rationale:** `router` from `useRouter()` is stable - it won't change between renders
+  3. **Safety:** Router methods (`router.replace`) can be called without being in dependencies (they're stable functions)
+
+**Step 2: Use useCallback for Navigation**
+- **File:** `contexts/profile-context.tsx` (if needed for optimization)
+- **Action:**
+  1. If navigation logic is complex, wrap in `useCallback`
+  2. Only include dependencies that actually change: `[session?.user?.id, isAuthLoading]`
+  3. **Note:** This is optional - router is already stable
+
+**Step 3: Testing**
+- Test profile loading: Verify no unnecessary re-renders
+- Test navigation: Verify routing still works correctly
+- Monitor performance: Check React DevTools for unnecessary effect runs
+
+---
+
+### 10. Optimistic Updates Missing Proper Error Boundaries
+
+**Status:** ⚠️ UX ISSUE  
+**Impact:** User sees success, then silent failure  
+**Priority:** 🟡 Medium (Poor user experience)
+
+**Example Location:** `stores/relationships-store.ts` lines 111-116
+
+**Current Issue:**
+```typescript
+} catch (error: any) {
+  console.error('[RelationshipsStore] Error saving parent relationship to database:', error);
+  usePeopleStore.setState({ people: oldPeople }); // Rollback optimistic update
+  // No user notification!
+}
+```
+
+**Implementation Plan:**
+
+**Step 1: Use Error Context for User Feedback**
+- **Files:** All store files with optimistic updates (`relationships-store.ts`, `updates-store.ts`, `people-store.ts`)
+- **Action:**
+  1. Import error context: `import { useError } from '@/contexts/error-context'` (NOTE: Can't use hooks in stores, see Step 2)
+  2. **Alternative:** Throw errors from stores, catch in components
+  3. Update catch blocks to throw errors:
+     ```typescript
+     } catch (error: any) {
+       usePeopleStore.setState({ people: oldPeople });
+       throw new Error(`Failed to save relationship: ${error.message}`);
+     }
+     ```
+
+**Step 2: Catch Errors in Components**
+- **Files:** Components using store actions (e.g., `app/(tabs)/index.tsx`, `app/(tabs)/profile.tsx`)
+- **Action:**
+  1. Wrap store action calls in try/catch:
+     ```typescript
+     const { showError } = useError(); // Use error context hook
+     
+     try {
+       await addParent(childId, parentId, userId);
+     } catch (error) {
+       showError('Failed to add parent. Please try again.');
+     }
+     ```
+  2. **Safety:** Don't prevent rollback - stores should always rollback on error
+  3. **UX:** Show user-friendly error messages via error context
+
+**Step 3: Identify All Optimistic Update Locations**
+- **Files to check:**
+  - `stores/relationships-store.ts` - `addParent`, `addChild`, `addSpouse`, `addSibling`
+  - `stores/updates-store.ts` - `addUpdate`, `updateUpdate`, `deleteUpdate`
+  - `stores/people-store.ts` - Any optimistic updates
+- **Action:** Add error handling to all catch blocks
+
+**Step 4: Testing**
+- Test network failure: Disable network → Attempt action → Verify rollback AND error message
+- Test invalid data: Send invalid data → Verify error message shows
+- Test success: Normal flow → Verify no error message appears
+
+---
+
+### 11. `getAllPeople()` Fetches ALL Users' Data
+
+**Status:** ⚠️ SCALABILITY & PRIVACY  
+**Impact:** Performance degrades with more users; potential data leakage  
+**Priority:** 🟡 Medium (Scales poorly, privacy concern)
+
+**Location:** `services/supabase/people-api.ts` lines 355-369 (approximate)
+
+**Current Issue:**
+```typescript
+export async function getAllPeople(): Promise<Person[]> {
+  const supabase = getSupabaseClient();
+  
+  const [peopleResponse, relationshipsResponse] = await Promise.all([
+    supabase
+      .from('people')
+      .select('*')  // Fetches ALL people across ALL family trees
+      .or('deletion_type.is.null,deletion_type.neq.delete_profile')
+      .order('created_at', { ascending: true }),
+    supabase.from('relationships').select('*'),  // Fetches ALL relationships
+  ]);
+}
+```
+
+**Problems:**
+- At 100+ users, this fetches entire database
+- RLS should limit this, but current policies may be too permissive
+- Creates N+1 performance issues
+- Privacy: Users shouldn't see people from other family trees
+
+**Implementation Plan:**
+
+**Step 1: Create SQL Function for Family Tree Query**
+- **Location:** Supabase SQL Editor
+- **Action:**
+  1. Create recursive CTE function to get only connected family members:
+     ```sql
+     CREATE OR REPLACE FUNCTION get_family_tree(root_user_id UUID)
+     RETURNS TABLE (
+       user_id UUID,
+       name TEXT,
+       -- ... other columns from people table
+     ) AS $$
+     WITH RECURSIVE family AS (
+       -- Base case: the root user's profile
+       SELECT p.* FROM people p 
+       WHERE p.linked_auth_user_id = root_user_id
+       
+       UNION
+       
+       -- Recursive case: related people
+       SELECT DISTINCT p.* FROM people p
+       INNER JOIN relationships r ON 
+         (p.user_id = r.person_one_id OR p.user_id = r.person_two_id)
+       INNER JOIN family f ON 
+         (f.user_id = r.person_one_id OR f.user_id = r.person_two_id)
+       WHERE p.user_id != f.user_id
+         AND (p.deletion_type IS NULL OR p.deletion_type != 'delete_profile')
+     )
+     SELECT * FROM family;
+     $$ LANGUAGE sql SECURITY DEFINER;
+     ```
+  2. **Safety:** Test with various family tree structures (cycles, disconnected nodes)
+  3. **Performance:** Add indexes on `relationships.person_one_id` and `relationships.person_two_id`
+
+**Step 2: Create New API Function**
+- **File:** `services/supabase/people-api.ts`
+- **Action:**
+  1. Create `getFamilyTree(userId: string): Promise<Person[]>` function
+  2. Use Supabase RPC call:
+     ```typescript
+     export async function getFamilyTree(userId: string): Promise<Person[]> {
+       const supabase = getSupabaseClient();
+       
+       const { data, error } = await supabase.rpc('get_family_tree', {
+         root_user_id: userId
+       });
+       
+       if (error) throw error;
+       
+       // Transform to Person[] format
+       return data.map(transformDbPersonToPerson);
+     }
+     ```
+  3. **Safety:** Add error handling for RPC call failures
+
+**Step 3: Update `syncFamilyTree` to Use New Function**
+- **File:** `stores/session-store.ts`
+- **Action:**
+  1. Import `getFamilyTree` instead of `getAllPeople`
+  2. Update `syncFamilyTree` (line 131):
+     ```typescript
+     const peopleFromBackend = await getFamilyTree(userId);
+     ```
+  3. **Safety:** Keep `getAllPeople` for admin/debug purposes (if needed), but don't use in production flow
+
+**Step 4: Update Relationships Loading**
+- **File:** `services/supabase/people-api.ts` or separate function
+- **Action:**
+  1. Create `getFamilyRelationships(userId: string)` function
+  2. Get relationships only for people in family tree:
+     ```typescript
+     // First get family tree
+     const familyTree = await getFamilyTree(userId);
+     const familyIds = familyTree.map(p => p.id);
+     
+     // Then get relationships involving family members
+     const { data } = await supabase
+       .from('relationships')
+       .select('*')
+       .in('person_one_id', familyIds)
+       .or(`person_two_id.in.(${familyIds.join(',')})`);
+     ```
+  3. **Performance:** This is more efficient than fetching all relationships
+
+**Step 5: Update RLS Policies**
+- **Location:** Supabase SQL Editor
+- **Action:**
+  1. Review RLS policies on `people` table
+  2. Ensure policies limit access to family members only
+  3. **Security:** Test that users can't access other family trees even if RPC function has issues
+
+**Step 6: Testing**
+- Test small family tree: Verify all connected members load
+- Test large family tree: Verify performance improvement
+- Test disconnected family: Verify only connected members load
+- Test privacy: Verify user A can't see user B's family tree
+- Test edge cases: Cycles in relationships, multiple relationships, etc.
+
+---
+
+## 📦 Data Portability (Export Flow)
+
+**Status:** ❌ Not implemented  
+**Priority:** 🟡 Medium (GDPR requirement, Apple recommendation)
+
+**Requirement:** Users should be able to export their data in a machine-readable format (GDPR Article 15, Apple App Store recommendation)
+
+**Implementation Plan:**
+
+**Step 1: Create Export API Function**
+- **File:** `services/supabase/export-api.ts` (new file)
+- **Action:**
+  1. Create `exportUserData(userId: string): Promise<ExportData>` function
+  2. Fetch all user's data from Supabase:
+     - Profile data (`people` table where `linked_auth_user_id = userId`)
+     - Relationships (`relationships` table where `person_one_id` or `person_two_id` matches user's profile)
+     - Updates (`updates` table where `created_by = userId`)
+     - Invitations sent (`invitations` table where `created_by = userId`)
+     - Photos (list photo URLs from Storage - don't download, just list)
+  3. Structure data as JSON:
+     ```typescript
+     interface ExportData {
+       profile: Person;
+       relationships: Relationship[];
+       updates: Update[];
+       invitations: Invitation[];
+       photos: { url: string; path: string }[];
+       exportedAt: string; // ISO 8601 timestamp
+       exportVersion: string; // For future compatibility
+     }
+     ```
+
+**Step 2: Generate JSON File**
+- **File:** `services/supabase/export-api.ts`
+- **Action:**
+  1. Convert `ExportData` to JSON string: `JSON.stringify(data, null, 2)`
+  2. Create filename: `familytree-export-${userId}-${timestamp}.json`
+  3. Return JSON string and filename
+
+**Step 3: Add Native Sharing**
+- **File:** `services/export-service.ts` (new file, uses expo-sharing)
+- **Action:**
+  1. Install `expo-sharing` if not already installed
+  2. Create `shareExportData(userId: string): Promise<void>` function:
+     ```typescript
+     import * as Sharing from 'expo-sharing';
+     import * as FileSystem from 'expo-file-system';
+     
+     async function shareExportData(userId: string) {
+       // 1. Get export data
+       const exportData = await exportUserData(userId);
+       const jsonString = JSON.stringify(exportData, null, 2);
+       
+       // 2. Write to temporary file
+       const fileUri = FileSystem.documentDirectory + `export-${Date.now()}.json`;
+       await FileSystem.writeAsStringAsync(fileUri, jsonString);
+       
+       // 3. Share using native share sheet
+       await Sharing.shareAsync(fileUri, {
+         mimeType: 'application/json',
+         dialogTitle: 'Export Your Data'
+       });
+     }
+     ```
+  3. **Platform-specific:** iOS/Android share sheet will allow saving to device or emailing
+
+**Step 4: Add UI in Settings**
+- **File:** `app/(tabs)/settings.tsx`
+- **Action:**
+  1. Add "Download My Data" button in Settings screen
+  2. Show loading state while generating export
+  3. On success: Native share sheet opens automatically
+  4. On error: Show error message with retry option
+  5. **UX:** Show what data will be exported (profile, posts, relationships, photos)
+
+**Step 5: Add to Privacy Policy**
+- **File:** `app/privacy-policy.tsx` (when created)
+- **Action:**
+  1. Add section: "Your Right to Data Portability"
+  2. Explain how to export data
+  3. Explain what data is included in export
+
+**Step 6: Testing**
+- Test export flow: Settings → Download Data → Verify JSON is valid
+- Test on iOS: Verify share sheet opens
+- Test on Android: Verify share sheet opens
+- Test with large data: Many updates/photos → Verify export completes
+- Verify data completeness: Check JSON includes all user's data
+
+---
+
+## 🎂 Neutral Age Gate Flow
+
+**Status:** ❌ Not implemented  
+**Priority:** 🔴 Critical (COPPA compliance, required before App Store submission)
+
+**Requirement:** COPPA requires age verification before collecting any data. Must ask for age BEFORE login buttons appear.
+
+**Current Flow:** Login buttons appear first → Age not checked → Potential COPPA violation
+
+**Implementation Plan:**
+
+**Step 1: Create Age Gate Screen**
+- **File:** `app/(auth)/age-gate.tsx` (new file, before login screen)
+- **Action:**
+  1. Create simple screen asking: "What is your birth year?" or "What is your date of birth?"
+  2. **Options:**
+     - **Option A:** Year only (simpler, less privacy-invasive)
+       - Dropdown: Select year (e.g., 2000-2024)
+     - **Option B:** Full date (more accurate, more privacy-invasive)
+       - Date picker: Month, Day, Year
+  3. Store age in local state (NOT sent to backend until after login)
+
+**Step 2: Age Eligibility Check**
+- **File:** `app/(auth)/age-gate.tsx`
+- **Action:**
+  1. Calculate age from birth year/date
+  2. If age < 13:
+     - Show "Not Eligible" message: "You must be 13 or older to use FamilyTree"
+     - Disable login buttons (prevent any data collection)
+     - **DO NOT** allow sign-in (COPPA violation if under 13)
+  3. If age >= 13:
+     - Show login buttons (Google Sign-In, etc.)
+     - Proceed to normal login flow
+
+**Step 3: Update Auth Flow**
+- **File:** `app/(auth)/_layout.tsx` or `app/_layout.tsx`
+- **Action:**
+  1. Add age gate as first screen in auth flow
+  2. Route: `/(auth)/age-gate` → `/(auth)/login`
+  3. **Logic:**
+     - If user is authenticated: Skip age gate (already verified)
+     - If user is not authenticated: Show age gate first
+  4. Store age eligibility in AsyncStorage (so user doesn't have to re-enter on app restart)
+
+**Step 4: Privacy Policy Consent**
+- **File:** `app/(auth)/age-gate.tsx` or `app/(auth)/login.tsx`
+- **Action:**
+  1. After age check passes (>= 13), show Privacy Policy consent checkbox
+  2. Text: "I agree to the [Privacy Policy](link) and [Terms of Service](link)"
+  3. **Required:** Checkbox must be checked before login buttons are enabled
+  4. **Record:** Store `privacy_policy_accepted_at` timestamp after login (see Step 5)
+
+**Step 5: Store Age and Consent in Database**
+- **File:** `services/supabase/people-api.ts`
+- **Action:**
+  1. After user signs in, create profile with:
+     - `birth_date` (from age gate)
+     - `privacy_policy_accepted_at` (timestamp)
+     - `age_gate_passed_at` (timestamp - when age was verified)
+  2. **Database:** Already have `privacy_policy_accepted_at` column (added in previous migration)
+  3. **Update:** `createUserProfile()` function to include these fields
+
+**Step 6: Handle Edge Cases**
+- **File:** `app/(auth)/age-gate.tsx`
+- **Action:**
+  1. **User changes mind:** Allow changing age before signing in (reset form)
+  2. **App restart:** Load age from AsyncStorage, skip age gate if already verified
+  3. **User lies about age:** Can't prevent, but document in privacy policy that lying violates terms
+  4. **Parent/Guardian:** If user says they're under 13, show message: "Please have a parent or guardian create an account"
+
+**Step 7: Testing**
+- Test under 13: Verify login buttons are disabled
+- Test 13+: Verify login buttons are enabled after age check
+- Test privacy policy: Verify consent checkbox is required
+- Test app restart: Verify age gate is skipped if already passed
+- Test COPPA compliance: Verify no data is collected before age check passes
+
+---
+
+## ✅ User Consent During Entry (Legal Shield)
+
+**Status:** ⚠️ Partially implemented (database columns exist)  
+**Priority:** 🔴 Critical (Apple requirement for UGC apps)
+
+**Requirement:** Apple requires explicit consent affirmations when creating UGC (User Generated Content). Must be in UI, not just privacy policy.
+
+**Database Status:** ✅ Already added:
+- `people.creator_confirmed_consent` (BOOLEAN)
+- `people.consent_confirmed_at` (TIMESTAMP)
+- `updates.creator_confirmed_sharing_consent` (BOOLEAN)
+
+**Implementation Plan:**
+
+### Part A: Profile Creation Consent
+
+**Step 1: Add Consent Checkbox to Add Person Modal**
+- **File:** `components/family-tree/AddPersonModal.tsx`
+- **Action:**
+  1. Add checkbox/affirmation BEFORE "Save" button:
+     - Text: "I confirm that I have obtained consent from this individual (or their legal guardian) to add their information to this family tree."
+     - **Required:** Checkbox must be checked before "Save" is enabled
+     - **Styling:** Prominent, with legal shield icon (if available)
+  2. Store consent state in component state
+
+**Step 2: Update Create Person API**
+- **File:** `services/supabase/people-api.ts`
+- **Action:**
+  1. Update `createRelative()` function to accept `creatorConfirmedConsent: boolean`
+  2. When creating person, set:
+     - `creator_confirmed_consent: true`
+     - `consent_confirmed_at: new Date()`
+  3. **Validation:** Throw error if `creatorConfirmedConsent` is false (prevent creation without consent)
+
+**Step 3: Update Create Person UI to Pass Consent**
+- **File:** `components/family-tree/AddPersonModal.tsx`
+- **Action:**
+  1. When calling `createRelative()`, pass consent value
+  2. Show error if API rejects due to missing consent
+  3. **UX:** Disable "Save" button if consent checkbox is not checked
+
+**Step 4: Add Report Option (Back Door)**
+- **File:** `components/family-tree/PersonCard.tsx` or profile page
+- **Action:**
+  1. Add "Report Profile" option in ellipses menu (see Report Abuse section)
+  2. Report type: "Unauthorized Profile" or "Created Without Consent"
+  3. **Apple Requirement:** Even with consent checkbox, subject must be able to disagree
+
+### Part B: Update/Post Consent
+
+**Step 1: Add Consent Checkbox to Add Update Modal**
+- **File:** `components/family-tree/AddUpdateModal.tsx`
+- **Action:**
+  1. Add checkbox/affirmation when posting to someone else's wall:
+     - Text: "I have permission to share this update and any included media on this person's profile."
+     - **Conditional:** Only show if posting to someone else's profile (not own profile)
+     - **Required:** Checkbox must be checked before "Post" is enabled
+  2. Store consent state in component state
+
+**Step 2: Update Create Update API**
+- **File:** `services/supabase/updates-api.ts`
+- **Action:**
+  1. Update `createUpdate()` function to accept `creatorConfirmedSharingConsent: boolean`
+  2. When creating update, set:
+     - `creator_confirmed_sharing_consent: true` (if posting to someone else's wall)
+     - `creator_confirmed_sharing_consent: false` (if posting to own wall - not required)
+  3. **Validation:** Throw error if posting to someone else's wall without consent
+
+**Step 3: Update Create Update UI to Pass Consent**
+- **File:** `components/family-tree/AddUpdateModal.tsx`
+- **Action:**
+  1. Check if `targetPersonId !== currentUserId` (posting to someone else)
+  2. If yes, show consent checkbox and require it
+  3. If no (own profile), don't show checkbox (not required)
+  4. Pass consent value to `createUpdate()` API call
+
+**Step 4: Add Report Option to Updates**
+- **File:** `app/(tabs)/profile.tsx` or `app/(tabs)/family.tsx`
+- **Action:**
+  1. Add "Report Update" option in update ellipses menu (already exists)
+  2. Report type: "Unauthorized Sharing" or "Shared Without Consent"
+  3. **Apple Requirement:** Subject must be able to report content even if creator claims consent
+
+**Step 5: Update Privacy Policy**
+- **File:** `app/privacy-policy.tsx` (when created)
+- **Action:**
+  1. Add section: "User Consent and Content Creation"
+  2. Explain that creators must confirm they have consent
+  3. Explain that subjects can report unauthorized content
+  4. Explain that lying about consent violates terms of service
+
+**Step 6: Testing**
+- Test profile creation: Verify consent checkbox is required
+- Test update creation: Verify consent checkbox only shows for others' profiles
+- Test API validation: Verify API rejects without consent
+- Test report flow: Verify users can report unauthorized content
+- Test edge cases: Own profile updates (no consent needed), shadow profiles (consent needed)
+
+---
+
+## 🌐 External Request Flow (Web)
+
+**Status:** ❌ Not implemented  
+**Priority:** 🟡 Medium (Apple recommendation, GDPR requirement)
+
+**Requirement:** Non-users (people who don't have the app) should be able to request removal of their shadow profiles via web form.
+
+**Use Case:** Someone finds out their profile was created without their knowledge → They don't have the app → They need a way to request removal
+
+**Implementation Plan:**
+
+**Step 1: Create Web Form Page**
+- **Location:** Create separate web app or static HTML page hosted on your domain
+- **File:** `web/request-removal.html` (or similar, not in mobile app)
+- **Action:**
+  1. Create simple HTML form with:
+     - Email input (required)
+     - Name input (to identify profile)
+     - Birth date input (optional, for verification)
+     - Description textarea: "Why are you requesting removal?"
+     - Submit button
+  2. **Styling:** Simple, mobile-friendly design
+  3. **URL:** `https://familytreeapp.com/request-removal` (or your domain)
+
+**Step 2: Create Backend API Endpoint**
+- **Location:** Supabase Edge Function or backend API
+- **File:** `supabase/functions/request-removal/index.ts` (or backend API endpoint)
+- **Action:**
+  1. Create endpoint: `POST /api/request-removal`
+  2. Accept form data:
+     ```typescript
+     interface RemovalRequest {
+       email: string;
+       name: string;
+       birthDate?: string;
+       description?: string;
+     }
+     ```
+  3. Create record in database (new table `removal_requests`)
+  4. Send confirmation email to requester
+
+**Step 3: Create Removal Requests Table**
+- **Location:** Supabase SQL Editor
+- **Action:**
+  1. Create table:
+     ```sql
+     CREATE TABLE removal_requests (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       email TEXT NOT NULL,
+       requester_name TEXT NOT NULL,
+       profile_name TEXT NOT NULL, -- Name of profile to remove
+       birth_date DATE, -- Optional, for verification
+       description TEXT,
+       status TEXT DEFAULT 'pending', -- 'pending', 'reviewed', 'completed', 'rejected'
+       reviewed_by UUID REFERENCES auth.users(id),
+       reviewed_at TIMESTAMP,
+       created_at TIMESTAMP DEFAULT NOW()
+     );
+     ```
+  2. Add indexes: `CREATE INDEX idx_removal_requests_status ON removal_requests(status)`
+
+**Step 4: Match Request to Profile**
+- **File:** Backend API or Supabase function
+- **Action:**
+  1. When request is submitted, search for matching profile:
+     ```typescript
+     // Find profiles matching name and birth date (if provided)
+     const matchingProfiles = await supabase
+       .from('people')
+       .select('*')
+       .eq('name', request.name)
+       .or(request.birthDate ? `birth_date.eq.${request.birthDate}` : '');
+     ```
+  2. Store matched profile IDs in `removal_requests` table (add `matched_profile_ids` JSON column)
+  3. **Manual Review:** Mark as "pending" for admin review (automated removal could be risky)
+
+**Step 5: Admin Review Process (Manual)**
+- **Location:** Admin panel or manual database review
+- **Action:**
+  1. Admin reviews removal requests:
+     - Verify identity (email confirmation, proof of identity)
+     - Check if profile matches requester
+     - Approve or reject request
+  2. If approved:
+     - Delete profile (hard delete or soft delete)
+     - Send confirmation email to requester
+  3. If rejected:
+     - Send explanation email to requester
+     - Allow appeal process
+
+**Step 6: Add Link in Privacy Policy**
+- **File:** `app/privacy-policy.tsx` (when created)
+- **Action:**
+  1. Add section: "Request Removal of Your Profile"
+  2. Link to web form: `https://familytreeapp.com/request-removal`
+  3. Explain process: "If you don't have the app, you can request removal via our web form"
+
+**Step 7: Email Verification**
+- **File:** Backend API or Supabase function
+- **Action:**
+  1. Send verification email when request is submitted
+  2. Require email confirmation before processing request
+  3. **Security:** Prevents spam/fake requests
+
+**Step 8: Testing**
+- Test web form: Submit request → Verify email confirmation
+- Test matching: Verify profile matching logic works
+- Test admin review: Verify admin can approve/reject requests
+- Test removal: Verify profile is deleted after approval
+- Test email notifications: Verify emails are sent correctly
+
+---
+
+## 📧 Proactive Notification for Shadow Profiles
+
+**Status:** ❌ Not implemented  
+**Priority:** 🟡 Medium (Good practice, reduces unauthorized profiles)
+
+**Requirement:** When email is added to a shadow profile, automatically send invitation email notifying the person.
+
+**Implementation Plan:**
+
+**Step 1: Detect Email Addition**
+- **File:** `services/supabase/people-api.ts`
+- **Action:**
+  1. In `updatePerson()` or `createRelative()`, check if `email` field is being added
+  2. **Trigger:** After profile is created/updated with email, call notification function
+  3. **Condition:** Only trigger if:
+     - Profile is shadow profile (`linked_auth_user_id IS NULL`)
+     - Email was just added (not already present)
+
+**Step 2: Create Invitation Email**
+- **File:** `services/supabase/invitations-api.ts` or new `services/email-service.ts`
+- **Action:**
+  1. Create `sendProfileNotificationEmail(email: string, profileId: string): Promise<void>`
+  2. Generate invitation link (reuse existing `createInvitationLink()` logic)
+  3. Send email with:
+     - Subject: "A profile has been created for you on FamilyTree"
+     - Body: Template explaining:
+       - "A family member has created a profile for you on FamilyTree"
+       - "You can [Claim it] or [Request its removal]"
+       - Link to claim profile
+       - Link to request removal (web form)
+  4. **Email Service:** Use Supabase email service or third-party (SendGrid, etc.)
+
+**Step 3: Update Profile Update API**
+- **File:** `services/supabase/people-api.ts`
+- **Action:**
+  1. In `updatePerson()`, after update succeeds:
+     ```typescript
+     // Check if email was just added to shadow profile
+     if (updatedPerson.linkedAuthUserId === null && updatedPerson.email && !oldPerson?.email) {
+       // Email was just added - send notification
+       await sendProfileNotificationEmail(updatedPerson.email, updatedPerson.id);
+     }
+     ```
+  2. **Safety:** Don't send email if profile already has `linked_auth_user_id` (already claimed)
+
+**Step 4: Update Create Relative API**
+- **File:** `services/supabase/people-api.ts`
+- **Action:**
+  1. In `createRelative()`, after profile is created:
+     ```typescript
+     // If email provided, send notification
+     if (newPerson.email && newPerson.linkedAuthUserId === null) {
+       await sendProfileNotificationEmail(newPerson.email, newPerson.id);
+     }
+     ```
+  2. **Timing:** Send email after profile is successfully created (not before)
+
+**Step 5: Email Template**
+- **Location:** Email service template or HTML file
+- **Action:**
+  1. Create email template with:
+     - Friendly greeting
+     - Explanation of shadow profile
+     - Two clear CTAs:
+       - "Claim Your Profile" (button linking to invitation link)
+       - "Request Removal" (button linking to removal form)
+     - Privacy policy link
+  2. **Tone:** Professional but friendly, non-alarming
+
+**Step 6: Track Email Sending**
+- **Database:** Add to `invitations` table or new `email_notifications` table
+- **Action:**
+  1. Record when notification email was sent
+  2. Track: `sent_at`, `email`, `profile_id`, `email_type` ('profile_notification')
+  3. **Purpose:** Prevent duplicate emails, track delivery
+
+**Step 7: Testing**
+- Test email sending: Add email to shadow profile → Verify email is sent
+- Test email content: Verify links work (claim + removal)
+- Test duplicate prevention: Add email twice → Verify only one email sent
+- Test claimed profile: Add email to claimed profile → Verify no email sent
+- Test email delivery: Verify emails arrive (check spam folder)
+
+---
+
 ## 📊 Implementation Roadmap
+
+**⚠️ IMPORTANT: Implement phases in order. Each phase must be completed and tested before moving to the next phase.**
+
+---
+
+### Phase 0: Foundation Fixes (Stability & Race Conditions) 🔴
+
+**Priority:** 🔴 **MUST DO FIRST** - Fixes bugs that affect all other features  
+**Why First:** These fixes ensure stable sync and prevent data corruption. Other features depend on reliable sync.
+
+**Estimated Time:** 4-6 days
+
+#### 0.1: Fix Session Store Race Condition
+- [ ] Move `isSyncing` from module-level to Zustand state (`stores/session-store.ts`)
+- [ ] Add `syncError: string | null` to store state
+- [ ] Update `syncFamilyTree` to use Zustand state with proper cleanup
+- [ ] Test: Multiple concurrent sync calls → Verify no race conditions
+- [ ] Test: Sync failure → Verify `isSyncing` returns to `false` and error is set
+- **Deliverable:** Stable sync function that prevents concurrent calls
+
+#### 0.2: Fix Profile Context Sync Waiting
+- [ ] Import `useSessionStore` hook in `contexts/profile-context.tsx`
+- [ ] Add check for `isSyncing` before making routing decisions
+- [ ] Wait for `isSyncing === false` before proceeding with profile checks
+- [ ] Test: Sign in → Verify profile check waits for sync completion
+- [ ] Test: Invited user sign-in → Verify sync completes before navigation
+- **Deliverable:** Profile context waits for sync before routing
+
+#### 0.3: Fix Auth Guard Timing
+- [ ] Add `isSyncing` check in `contexts/guards/auth-guard.tsx`
+- [ ] Wait for sync before checking ego validity
+- [ ] Test: Fast sign-in → Verify guard doesn't redirect before sync
+- **Deliverable:** Auth guard works correctly with async sync
+
+#### 0.4: Fix Invitation Claim Flow Race Condition
+- [ ] Update `app/join/[token].tsx` to wait for sync completion
+- [ ] Remove `setTimeout` delay OR ensure it's after sync completes
+- [ ] Verify people loaded before navigating
+- [ ] Test: Claim invitation → Verify tree loads before navigation
+- [ ] Test: Slow network → Verify navigation waits for sync
+- **Deliverable:** Invitation flow works reliably
+
+#### 0.5: Fix Optimistic Updates Error Handling
+- [ ] Update all store catch blocks to throw errors (`relationships-store.ts`, `updates-store.ts`)
+- [ ] Add error catching in components using stores
+- [ ] Integrate `useError` context for user feedback
+- [ ] Test: Network failure → Verify rollback AND error message
+- **Deliverable:** Users see errors when optimistic updates fail
+
+#### 0.6: Fix Profile Context useEffect Dependencies
+- [ ] Remove `router` from dependency array (it's stable)
+- [ ] Test: Verify no unnecessary re-renders
+- **Deliverable:** Optimized profile context
+
+**Phase 0 Testing Checklist:**
+- ✅ Multiple users can sign in without sync conflicts
+- ✅ Invited users see full family tree after claim
+- ✅ Sync failures show errors, don't leave app in broken state
+- ✅ Optimistic updates rollback correctly on error
+- ✅ No race conditions in concurrent operations
+
+---
 
 ### Phase 1: Critical Compliance (Blocking Submission) 🔴
 
-**Priority:** Must complete before App Store submission
+**Priority:** 🔴 **MUST COMPLETE** - Required for App Store submission  
+**Dependencies:** Phase 0 must be complete (stable sync required)  
+**Estimated Time:** 16-22 days
 
-- [ ] **Privacy Policy**
-  - Research Termly/Iubenda UGC templates
-  - Create privacy policy page
-  - Add consent flow in sign-up
-  - Add link in settings
-  - Estimated: 2-3 days
+#### 1.1: Neutral Age Gate (COPPA Compliance)
+- [ ] Create age gate screen (`app/(auth)/age-gate.tsx`)
+- [ ] Add age eligibility check (block < 13)
+- [ ] Update auth flow to show age gate before login
+- [ ] Store age eligibility in AsyncStorage
+- [ ] Add privacy policy consent checkbox (required before login)
+- [ ] Update `createUserProfile()` to store `birth_date` and `privacy_policy_accepted_at`
+- [ ] Test: Under 13 → Verify login buttons disabled
+- [ ] Test: 13+ → Verify login works after consent
+- **Deliverable:** COPPA-compliant age verification
+- **Time:** 2-3 days
 
-- [ ] **Account Deletion**
-  - Design deletion strategy (Delete Everything vs Keep Shadow Profile)
-  - Implement grace period system (30-day recovery window)
-  - Implement recovery token system
-  - Implement API (`account-api.ts`)
-  - Implement deleted profiles blacklist (prevent recreation)
-  - Add UI in Profile tab (`app/(tabs)/profile.tsx`)
-  - Add "Cancel Deletion" and "Restore Account" flows
-  - Background job to process deletions after grace period
-  - Test cascading deletion
-  - Test blacklist prevention
-  - Test recovery flow
-  - Estimated: 5-7 days
+#### 1.2: Privacy Policy
+- [ ] Research Termly/Iubenda UGC templates
+- [ ] Create privacy policy page (`app/privacy-policy.tsx`)
+- [ ] Add sections: UGC, shadow profiles, data usage, user rights
+- [ ] Add privacy policy link in Settings
+- [ ] Add privacy policy link in age gate screen
+- [ ] Update onboarding to reference privacy policy
+- [ ] Test: Verify all links work, content is readable
+- **Deliverable:** Complete privacy policy accessible in app
+- **Time:** 2-3 days
 
-- [ ] **Report Abuse**
-  - Design database schema
-  - Implement API (`reports-api.ts`)
-  - Add report option in ellipses menu:
-    - Family tab (PersonCard ellipses menu)
-    - Profile tab (Update card ellipses menu)
-    - Family feed (Update card ellipses menu)
-  - Report modal/form
-  - Basic admin review (manual for now)
-  - Estimated: 4-5 days
+#### 1.3: Report Abuse System
+- [ ] Create `reports` table in database
+- [ ] Create `reports-api.ts` with `reportContent()` function
+- [ ] Add "Report" option in ellipses menus:
+  - [ ] PersonCard ellipses menu (Family tab)
+  - [ ] Update card ellipses menu (Profile tab)
+  - [ ] Update card ellipses menu (Family feed)
+- [ ] Create ReportAbuseModal component (reuse existing or create new)
+- [ ] Implement report submission flow
+- [ ] Test: Report profile → Verify report saved
+- [ ] Test: Report update → Verify report saved
+- [ ] Test: Report shadow profile → Verify report saved
+- **Deliverable:** Users can report inappropriate content
+- **Time:** 4-5 days
 
-- [ ] **Update Visibility & Management**
-  - Implement visibility toggle API (`updateUpdateVisibility`)
-  - Implement bulk delete API (`deleteAllUserUpdates`)
-  - Implement bulk visibility change API
-  - Add visibility toggle in update card ellipses menu
-  - Add "Manage My Updates" section in Profile tab
-  - Estimated: 2-3 days
+#### 1.4: Account Deletion
+- [ ] Create database schema (soft delete columns, `deleted_profiles` table)
+- [ ] Create `account-api.ts` with deletion functions
+- [ ] Implement grace period system (30-day recovery)
+- [ ] Implement recovery token system
+- [ ] Add "Delete Account" UI in Profile tab
+- [ ] Add deletion confirmation dialog (Delete Everything vs Keep Shadow Profile)
+- [ ] Implement deleted profiles blacklist check
+- [ ] Add "Cancel Deletion" button (during grace period)
+- [ ] Test: Delete Everything → Verify blacklist prevents recreation
+- [ ] Test: Keep Shadow Profile → Verify profile remains
+- [ ] Test: Grace period recovery → Verify account restores
+- **Deliverable:** Users can delete accounts with recovery option
+- **Time:** 5-7 days
 
-**Total Phase 1:** ~14-20 days
+#### 1.5: Update Visibility & Management
+- [ ] Implement `updateUpdateVisibility()` API
+- [ ] Implement `deleteAllUserUpdates()` API
+- [ ] Implement `updateAllUserUpdatesVisibility()` API
+- [ ] Add visibility toggle in update ellipses menu
+- [ ] Add "Manage My Updates" section in Profile tab
+- [ ] Test: Toggle visibility → Verify update visibility changes
+- [ ] Test: Bulk delete → Verify all updates deleted
+- [ ] Test: Bulk visibility change → Verify all updates updated
+- **Deliverable:** Users control their content visibility
+- **Time:** 2-3 days
 
----
-
-### Phase 2: Permission System 🟡
-
-**Priority:** Core feature, but not blocking submission
-
-- [ ] **Auto-Submit Edit System**
-  - Database schema (`profile_edit_history`, `profile_edit_rejections`, `profile_contributors`)
-  - API for edits (`profile-edit-history-api.ts`)
-  - API for rejections (`profile-edit-rejections-api.ts`)
-  - API for contributors (`profile-contributors-api.ts`)
-  - Auto-submit logic (apply immediately)
-  - Rejection logic (post-hoc moderation, auto-revert on threshold)
-  - Notification system for new edits
-  - Estimated: 5-7 days
-
-- [ ] **Edit & Moderation UI**
-  - "Edit" button on profile pages (for shadow profiles)
-  - Edit modal/form (apply immediately)
-  - "Recent Changes" log UI (show edit history)
-  - Rejection UI (reject button on changes)
-  - Rejection status display (e.g., "1 of 2 rejections needed")
-  - Notification badges for new edits
-  - Estimated: 4-5 days
-
-**Total Phase 2:** ~9-12 days
-
----
-
-### Phase 3: Memorial & Minor Protection 🟢
-
-**Priority:** Enhancements, can ship later
-
-- [ ] **Memorial Mode**
-  - Database changes
-  - Logic for memorial detection
-  - UI for memorial profiles
-  - Estimated: 3-4 days
-
-- [ ] **Minor Protection**
-  - Age calculation logic
-  - Database changes
-  - Privacy controls
-  - Parent/guardian system
-  - Estimated: 5-7 days
-
-**Total Phase 3:** ~8-11 days
+**Phase 1 Testing Checklist:**
+- ✅ Age gate blocks under 13, allows 13+
+- ✅ Privacy policy is accessible and complete
+- ✅ Users can report all types of content
+- ✅ Account deletion works with grace period
+- ✅ Users can manage their updates visibility
 
 ---
 
-### Phase 4: Data Minimization Audit 🟢
+### Phase 2: User Consent & Legal Shield (UGC Compliance) 🟡
 
-**Priority:** Ongoing improvement
+**Priority:** 🟡 **High Priority** - Apple requirement for UGC apps  
+**Dependencies:** Phase 1.2 (Privacy Policy must exist)  
+**Estimated Time:** 4-6 days
 
-- [ ] Audit data collection
+**Note:** Database columns already exist (`creator_confirmed_consent`, `consent_confirmed_at`, `creator_confirmed_sharing_consent`)
+
+#### 2.1: Profile Creation Consent
+- [ ] Add consent checkbox to `AddPersonModal.tsx`
+- [ ] Text: "I confirm that I have obtained consent from this individual (or their legal guardian) to add their information to this family tree."
+- [ ] Make checkbox required (disable Save if unchecked)
+- [ ] Update `createRelative()` API to accept and validate `creatorConfirmedConsent`
+- [ ] Store consent in database (`creator_confirmed_consent`, `consent_confirmed_at`)
+- [ ] Add "Report Profile" option to PersonCard (if not already in Phase 1.3)
+- [ ] Test: Create profile without consent → Verify Save disabled
+- [ ] Test: Create profile with consent → Verify profile created with consent flag
+- [ ] Test: Report unauthorized profile → Verify report submitted
+- **Deliverable:** Profile creation requires consent affirmation
+- **Time:** 2-3 days
+
+#### 2.2: Update/Post Consent (Posting to Others' Walls)
+- [ ] Add consent checkbox to `AddUpdateModal.tsx`
+- [ ] Show checkbox only when posting to someone else's profile (`targetPersonId !== currentUserId`)
+- [ ] Text: "I have permission to share this update and any included media on this person's profile."
+- [ ] Make checkbox required (disable Post if unchecked)
+- [ ] Update `createUpdate()` API to accept and validate `creatorConfirmedSharingConsent`
+- [ ] Store consent in database (`creator_confirmed_sharing_consent`)
+- [ ] Test: Post to own wall → Verify no consent checkbox shown
+- [ ] Test: Post to others' wall without consent → Verify Post disabled
+- [ ] Test: Post to others' wall with consent → Verify update created with consent flag
+- [ ] Test: Report unauthorized update → Verify report submitted
+- **Deliverable:** Posting to others' walls requires consent affirmation
+- **Time:** 2-3 days
+
+**Phase 2 Testing Checklist:**
+- ✅ Profile creation requires consent checkbox
+- ✅ Posting to others' walls requires consent checkbox
+- ✅ Consent flags stored in database
+- ✅ Users can report unauthorized content
+- ✅ Privacy policy references consent requirements
+
+---
+
+### Phase 3: Data Rights & Privacy (GDPR Compliance) 🟡
+
+**Priority:** 🟡 **Medium Priority** - GDPR requirement, Apple recommendation  
+**Dependencies:** Phase 1 complete (stable app, account deletion working)  
+**Estimated Time:** 8-12 days
+
+#### 3.1: Data Portability (Export)
+- [ ] Create `export-api.ts` with `exportUserData()` function
+- [ ] Fetch all user's data (profile, relationships, updates, invitations, photos)
+- [ ] Generate JSON export file
+- [ ] Install `expo-sharing` if not already installed
+- [ ] Create `export-service.ts` with `shareExportData()` function
+- [ ] Add "Download My Data" button in Settings
+- [ ] Add export loading state and error handling
+- [ ] Update privacy policy with data portability section
+- [ ] Test: Export data → Verify JSON contains all user data
+- [ ] Test: Share JSON → Verify native share sheet opens (iOS/Android)
+- [ ] Test: Large exports → Verify completes successfully
+- **Deliverable:** Users can export their data in JSON format
+- **Time:** 3-4 days
+
+#### 3.2: External Removal Request Flow (Web)
+- [ ] Create web form HTML page (`web/request-removal.html`)
+- [ ] Create `removal_requests` table in database
+- [ ] Create backend API endpoint (Supabase Edge Function or API)
+- [ ] Implement profile matching logic (name + birth date)
+- [ ] Add email verification for requests
+- [ ] Create admin review process (manual)
+- [ ] Add link to web form in privacy policy
+- [ ] Test: Submit removal request → Verify email sent
+- [ ] Test: Verify email → Verify request saved
+- [ ] Test: Admin approves → Verify profile deleted
+- **Deliverable:** Non-users can request profile removal via web
+- **Time:** 4-5 days
+
+#### 3.3: Scalability Fix (`getAllPeople()` → Family Tree Query)
+- [ ] Create SQL function `get_family_tree(root_user_id UUID)` with recursive CTE
+- [ ] Test SQL function with various family tree structures
+- [ ] Create `getFamilyTree()` API function in `people-api.ts`
+- [ ] Create `getFamilyRelationships()` API function
+- [ ] Update `syncFamilyTree()` in `session-store.ts` to use `getFamilyTree()`
+- [ ] Update RLS policies to ensure privacy (test user A can't see user B's tree)
+- [ ] Test: Small family tree → Verify all connected members load
+- [ ] Test: Large family tree → Verify performance improvement
+- [ ] Test: Privacy → Verify users can't see other family trees
+- **Deliverable:** Efficient family tree queries (not fetching entire database)
+- **Time:** 2-3 days
+
+**Phase 3 Testing Checklist:**
+- ✅ Users can export their data
+- ✅ Web form allows removal requests
+- ✅ Family tree queries are efficient and private
+- ✅ All features work with new query system
+
+---
+
+### Phase 4: Enhanced Features & Notifications 🟢
+
+**Priority:** 🟢 **Low Priority** - Nice-to-have features  
+**Dependencies:** Phase 2 complete (consent system in place)  
+**Estimated Time:** 4-6 days
+
+#### 4.1: Proactive Shadow Profile Notifications
+- [ ] Create `sendProfileNotificationEmail()` function
+- [ ] Set up email service (Supabase or SendGrid)
+- [ ] Create email template with "Claim" and "Request Removal" links
+- [ ] Update `updatePerson()` to detect email addition to shadow profile
+- [ ] Update `createRelative()` to send email if email provided
+- [ ] Add email tracking to prevent duplicates
+- [ ] Test: Add email to shadow profile → Verify email sent
+- [ ] Test: Email content → Verify links work
+- [ ] Test: Duplicate prevention → Verify only one email sent
+- **Deliverable:** Shadow profiles with emails receive notification
+- **Time:** 3-4 days
+
+#### 4.2: Permission System (Wikipedia-Style Consensus)
+- [ ] Create database schema (`profile_edit_history`, `profile_edit_rejections`, `profile_contributors`)
+- [ ] Create `profile-edit-history-api.ts`
+- [ ] Create `profile-edit-rejections-api.ts`
+- [ ] Implement auto-submit edit logic (apply immediately)
+- [ ] Implement rejection logic (post-hoc moderation, auto-revert on threshold)
+- [ ] Add "Edit" button on shadow profile pages
+- [ ] Add "Recent Changes" log UI
+- [ ] Add rejection UI and status display
+- [ ] Test: Edit shadow profile → Verify change applied immediately
+- [ ] Test: Reject edit → Verify auto-revert after 2 rejections
+- **Deliverable:** Collaborative editing system for shadow profiles
+- **Time:** 5-7 days (can be split into separate sub-phase if needed)
+
+**Phase 4 Testing Checklist:**
+- ✅ Shadow profile emails trigger notifications
+- ✅ Users can edit shadow profiles collaboratively
+- ✅ Edit rejection system works correctly
+
+---
+
+### Phase 5: Future Enhancements 🔵
+
+**Priority:** 🔵 **Future** - Can ship after App Store submission  
+**Dependencies:** All previous phases complete  
+**Estimated Time:** 11-15 days
+
+#### 5.1: Memorial Mode
+- [ ] Add `memorial_mode` column to `people` table
+- [ ] Implement memorial detection logic (death date)
+- [ ] Create memorial UI (badge, timeline view)
+- [ ] Lock relationships in memorial mode
+- [ ] Test: Deceased profile → Verify memorial mode enabled
+- **Time:** 3-4 days
+
+#### 5.2: Minor Protection
+- [ ] Implement age calculation logic
+- [ ] Add minor protection database columns
+- [ ] Add privacy controls for minors
+- [ ] Create parent/guardian system
+- [ ] Test: Minor profile → Verify protections applied
+- **Time:** 5-7 days
+
+#### 5.3: Data Minimization Audit
+- [ ] Audit all data collection points
 - [ ] Remove unnecessary fields
-- [ ] Document data retention
-- [ ] Review photo storage optimization
-- Estimated: 2-3 days
+- [ ] Document data retention policies
+- [ ] Optimize photo storage
+- [ ] Test: Verify app works with minimal data
+- **Time:** 2-3 days
+
+---
+
+## 🎯 Phase Summary
+
+| Phase | Priority | Time | Dependencies | Status |
+|-------|----------|------|--------------|--------|
+| **Phase 0** | 🔴 Critical | 4-6 days | None | ⬜ Not Started |
+| **Phase 1** | 🔴 Critical | 16-22 days | Phase 0 | ⬜ Not Started |
+| **Phase 2** | 🟡 High | 4-6 days | Phase 1.2 | ⬜ Not Started |
+| **Phase 3** | 🟡 Medium | 8-12 days | Phase 1 | ⬜ Not Started |
+| **Phase 4** | 🟢 Low | 4-6 days | Phase 2 | ⬜ Not Started |
+| **Phase 5** | 🔵 Future | 11-15 days | All phases | ⬜ Not Started |
+
+**Total Estimated Time:** 47-67 days (if done sequentially)
+
+**Critical Path (Minimum for App Store Submission):**
+- Phase 0 (4-6 days) → Phase 1 (16-22 days) → **Total: 20-28 days**
 
 ---
 
@@ -1048,7 +2125,7 @@ User Posts Update
    - [ ] Wireframes for account deletion flow
    - [ ] Privacy policy content outline
    - [ ] Permission system UI/UX
-
+s
 4. **Implementation:**
    - [ ] Start with Phase 1 (Critical Compliance)
    - [ ] Test thoroughly before submission
