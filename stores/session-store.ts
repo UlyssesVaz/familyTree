@@ -49,6 +49,9 @@ interface SessionStore {
   syncFamilyTree: (userId: string) => Promise<void>;
 }
 
+// ✅ Store sync promise outside Zustand state to prevent race conditions
+let activeSyncPromise: Promise<void> | null = null;
+
 export const useSessionStore = create<SessionStore>((set, get) => ({
   egoId: null,
   isSyncing: false,
@@ -125,74 +128,71 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     usePeopleStore.setState({ people: new Map() });
     useUpdatesStore.setState({ updates: new Map() });
     set({ egoId: null, isSyncing: false, syncError: null, deletionStatus: null });
+    
+    // Clear sync promise
+    activeSyncPromise = null;
   },
 
   setDeletionStatus: (status) => set({ deletionStatus: status }),
 
   syncFamilyTree: async (userId) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'session-store.ts:132',message:'syncFamilyTree entry',data:{userId,isSyncing:get().isSyncing},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,E'})}).catch(()=>{});
-    // #endregion
-    // Prevent concurrent sync calls using Zustand state
-    if (get().isSyncing) {
+    // ✅ CRITICAL: Atomic concurrent sync protection
+    // Uses promise tracking outside Zustand state to prevent race conditions
+    // If sync is already in progress, return existing promise (don't start new sync)
+    // This prevents duplicate API calls and inconsistent state updates
+    if (activeSyncPromise) {
       if (__DEV__) {
-        console.log('[SessionStore] syncFamilyTree: Already syncing, skipping duplicate call');
+        console.log('[SessionStore] Sync already in progress, awaiting existing promise');
       }
-      return;
+      return activeSyncPromise;
     }
     
-    // Set syncing state and clear any previous errors
-    set({ isSyncing: true, syncError: null });
+    // ✅ Create new sync promise and store it
+    // The promise is stored outside Zustand state to ensure atomicity
+    activeSyncPromise = (async () => {
+      // Set syncing state
+      set({ isSyncing: true, syncError: null });
+      
+      try {
+        // Load all people and updates from backend in parallel
+        const [peopleFromBackend, updatesFromBackend] = await Promise.all([
+          getAllPeople(userId),
+          getAllUpdates(userId),
+        ]);
+        
+        if (__DEV__) {
+          console.log('[SessionStore] syncFamilyTree: Loaded data', { 
+            peopleCount: peopleFromBackend.length,
+            updatesCount: updatesFromBackend.length,
+          });
+        }
+        
+        // Update stores with data from backend
+        usePeopleStore.getState().setPeople(peopleFromBackend);
+        useUpdatesStore.getState().setUpdates(updatesFromBackend);
+        
+        // Set ego if user has a profile
+        const ego = peopleFromBackend.find(p => p.linkedAuthUserId === userId);
+        if (ego) {
+          set({ egoId: ego.id });
+        }
+        
+        if (__DEV__) {
+          console.log('[SessionStore] Successfully synced family tree');
+        }
+      } catch (error: any) {
+        const errorMessage = error?.message || 'Failed to sync family tree';
+        console.error('[SessionStore] Error syncing family tree:', error);
+        set({ syncError: errorMessage });
+        throw error; // Re-throw so caller can handle
+      } finally {
+        // Always reset syncing state
+        set({ isSyncing: false });
+        // ✅ Clear promise reference (allows new sync to start)
+        activeSyncPromise = null;
+      }
+    })();
     
-    try {
-      // Load all people and updates from backend in parallel
-      // Pass userId to getAllPeople for blocked user detection
-      // Pass userId to getAllUpdates to filter blocked users
-      const [peopleFromBackend, updatesFromBackend] = await Promise.all([
-        getAllPeople(userId), // ← ADD currentUserId parameter
-        getAllUpdates(userId),
-      ]);
-      
-      if (__DEV__) {
-        console.log('[SessionStore] syncFamilyTree: Got people from backend', { 
-          count: peopleFromBackend.length,
-        });
-        console.log('[SessionStore] syncFamilyTree: Got updates from backend', {
-          count: updatesFromBackend.length,
-        });
-      }
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'session-store.ts:163',message:'syncFamilyTree updating stores',data:{peopleCount:peopleFromBackend.length,placeholderCount:peopleFromBackend.filter(p=>p.isPlaceholder).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
-      // Update stores with data from backend
-      usePeopleStore.getState().setPeople(peopleFromBackend);
-      useUpdatesStore.getState().setUpdates(updatesFromBackend);
-      
-      if (__DEV__) {
-        console.log('[SessionStore] syncFamilyTree: Updated store', { 
-          peopleCount: peopleFromBackend.length,
-          updatesCount: updatesFromBackend.length 
-        });
-      }
-      
-      // Set ego if user has a profile
-      const ego = peopleFromBackend.find(p => p.linkedAuthUserId === userId);
-      if (ego) {
-        set({ egoId: ego.id });
-      }
-      
-      if (__DEV__) {
-        console.log('[SessionStore] Successfully synced family tree from backend');
-      }
-    } catch (error: any) {
-      const errorMessage = error?.message || 'Failed to sync family tree';
-      console.error('[SessionStore] Error syncing family tree:', error);
-      // Store error in state for components to access
-      set({ syncError: errorMessage });
-    } finally {
-      // Always reset syncing state, even on error
-      set({ isSyncing: false });
-    }
+    return activeSyncPromise;
   },
 }));

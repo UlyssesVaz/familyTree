@@ -55,7 +55,8 @@
         {
           "iosUrlScheme": "com.googleusercontent.apps.25937956656-a8ksba4gi4il4j7vms40ftu0cu91dbgu"
         }
-      ]
+      ],
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true,

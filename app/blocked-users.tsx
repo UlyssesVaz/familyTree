@@ -113,10 +113,6 @@ export default function BlockedUsersScreen() {
             const people = usePeopleStore.getState().people;
             let existingPerson: Person | null = null;
             
-            // #region agent log
-            fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:113',message:'unblock: searching for existing person',data:{userId,peopleCount:people.size,peopleIds:Array.from(people.keys()),peopleLinkedAuthUserIds:Array.from(people.values()).map(p=>p.linkedAuthUserId).filter(Boolean)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
-            
             // Find the existing placeholder person to preserve relationships
             for (const [personId, person] of people.entries()) {
               if (person.linkedAuthUserId === userId) {
@@ -125,23 +121,13 @@ export default function BlockedUsersScreen() {
               }
             }
             
-            // #region agent log
-            fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:124',message:'unblock: found existing person',data:{foundExistingPerson:!!existingPerson,existingPersonId:existingPerson?.id,existingIsPlaceholder:existingPerson?.isPlaceholder,existingName:existingPerson?.name||''},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
-            
             // Fetch fresh person data from database FIRST (before optimistic update)
             // This ensures we have the real name and data immediately
             let personData: Person | null = null;
             try {
               personData = await getUserProfile(userId);
-              // #region agent log
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:134',message:'unblock: fetched personData from DB',data:{gotPersonData:!!personData,personDataId:personData?.id,personDataName:personData?.name||'',personDataIsPlaceholder:personData?.isPlaceholder},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-              // #endregion
             } catch (error) {
               console.warn('[BlockedUsers] Could not fetch person data for optimistic update:', error);
-              // #region agent log
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:138',message:'unblock: ERROR fetching personData',data:{error:error instanceof Error?error.message:'unknown'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-              // #endregion
             }
             
             // If we found the existing placeholder, restore it IMMEDIATELY (optimistic)
@@ -177,31 +163,15 @@ export default function BlockedUsersScreen() {
                 linkedAuthUserId: existingPerson.linkedAuthUserId,
               };
               
-              // #region agent log
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:171',message:'unblock: updating person in store',data:{restoredPersonId:restoredPerson.id,restoredPersonName:restoredPerson.name||'',restoredIsPlaceholder:restoredPerson.isPlaceholder,hasParentIds:restoredPerson.parentIds.length,hasChildIds:restoredPerson.childIds.length,hasSpouseIds:restoredPerson.spouseIds.length,hasSiblingIds:restoredPerson.siblingIds.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-              // #endregion
-              
               // Update the person in the store - this should trigger re-render
               usePeopleStore.getState().updatePerson(restoredPerson);
-              
-              // #region agent log
-              const afterUpdate = usePeopleStore.getState().people.get(restoredPerson.id);
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:177',message:'unblock: after updatePerson in store',data:{personInStore:!!afterUpdate,personId:afterUpdate?.id,personName:afterUpdate?.name||'',personIsPlaceholder:afterUpdate?.isPlaceholder,storeSize:usePeopleStore.getState().people.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-              // #endregion
             } else if (personData) {
               // Person not in store yet - just add them
-              // #region agent log
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:187',message:'unblock: adding new person (not found in store)',data:{personDataId:personData.id,personDataName:personData.name||''},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-              // #endregion
               usePeopleStore.getState().updatePerson({
                 ...personData,
                 isPlaceholder: false,
                 placeholderReason: undefined,
               });
-            } else {
-              // #region agent log
-              fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'blocked-users.tsx:195',message:'unblock: WARNING no existing person and no personData',data:{userId,foundExistingPerson:!!existingPerson,gotPersonData:!!personData},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-              // #endregion
             }
             
             try {

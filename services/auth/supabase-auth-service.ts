@@ -109,17 +109,18 @@ export class SupabaseAuthService implements AuthService {
 
   async signInWithIdToken(provider: AuthProvider, idToken: string): Promise<AuthSession> {
     try {
-      if (provider !== 'google') {
+      // Support both Google and Apple (and any OIDC provider)
+      if (provider !== 'google' && provider !== 'apple') {
         throw {
           code: 'unsupported_provider',
-          message: `signInWithIdToken is only supported for Google provider. Got: ${provider}`,
+          message: `signInWithIdToken is only supported for Google and Apple providers. Got: ${provider}`,
           provider,
         } as AuthError;
       }
 
       const supabase = this.getSupabase();
       const { data, error } = await supabase.auth.signInWithIdToken({
-        provider: 'google',
+        provider: provider, // Use the provided provider (google or apple)
         token: idToken,
       });
 
@@ -307,4 +308,5 @@ export class SupabaseAuthService implements AuthService {
     };
   }
 }
+
 

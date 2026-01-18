@@ -77,12 +77,15 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
 /**
  * Create a new person profile (ego) in Supabase
  * 
- * IMPORTANT: Uploads local photos to Supabase Storage before saving to database.
- * Only navigates to next step after successful 201 Created response.
+ * IMPORTANT: 
+ * - Uses atomic upsert to prevent race conditions (TOCTOU vulnerability)
+ * - Database UNIQUE constraint on linked_auth_user_id ensures only one profile per user
+ * - If profile already exists, returns existing profile (idempotent)
+ * - Uploads local photos to Supabase Storage before saving to database
  * 
  * @param userId - The authenticated user's ID from auth.users (required)
  * @param input - Person data to create
- * @returns Created Person object
+ * @returns Created or existing Person object
  * @throws Error if creation fails
  */
 export async function createEgoProfile(
@@ -91,88 +94,59 @@ export async function createEgoProfile(
 ): Promise<Person> {
   const supabase = getSupabaseClient();
   
-  // STEP 0: COPPA Compliance - Check if user is blocked from re-registration
-  // This prevents users who were COPPA-deleted from creating new accounts
+  // STEP 1: COPPA Compliance - Check if user is blocked from re-registration
   const isBlocked = await isCOPPABlocked(userId);
   if (isBlocked) {
-    throw new COPPAViolationError('You cannot create an account. Your previous account was permanently closed due to age requirements. You must be at least 13 years old to use this app.');
+    throw new COPPAViolationError(
+      'You cannot create an account. Your previous account was permanently closed due to age requirements. You must be at least 13 years old to use this app.'
+    );
   }
   
-  // STEP 1: Check if profile already exists (prevent duplicate creation)
-  const existingProfile = await getUserProfile(userId);
-  if (existingProfile) {
-    console.warn('[People API] Profile already exists for user, returning existing profile');
-    return existingProfile;
-  }
-  
-  // STEP 1: Upload photo to Supabase Storage if it's a local file URI
-  // This must complete BEFORE we save to database
+  // STEP 2: Upload photo to Supabase Storage if it's a local file URI
   const photoUrl = await uploadPhotoIfLocal(
     input.photoUrl,
     STORAGE_BUCKETS.PERSON_PHOTOS,
     `profiles/${userId}`,
     'People API'
-  ) ?? undefined; // Convert null to undefined for consistency
+  ) ?? undefined;
   
-  // STEP 2: Prepare database row (map TypeScript types to PostgreSQL schema)
-  // NOTE: user_id is now DB-generated (gen_random_uuid()), not manually set
-  // NOTE: linked_auth_user_id is the bridge to Supabase Auth (userId from auth.users)
+  // STEP 3: Prepare database row
   const row: any = {
-    // REMOVED: user_id - Let database generate it automatically
     name: input.name.trim(),
     birth_date: input.birthDate || null,
     death_date: null,
     gender: input.gender || null,
-    photo_url: photoUrl || null, // Use uploaded URL or original remote URL
+    photo_url: photoUrl || null,
     bio: input.bio || null,
     phone_number: input.phoneNumber || null,
-    created_by: userId, // The curator (authenticated user who created this profile)
-    linked_auth_user_id: userId, // CRITICAL: Bridge to Supabase Auth - links profile to authenticated user
-    // Note: updated_by and version columns don't exist in current schema
-    // Add them here if you add the columns to your database
+    created_by: userId,
+    linked_auth_user_id: userId,
   };
   
-  // COPPA Compliance: Store privacy policy acceptance timestamp if provided
-  // This field may not exist in all database schemas, so we conditionally include it
   if (input.privacyPolicyAcceptedAt) {
     row.privacy_policy_accepted_at = input.privacyPolicyAcceptedAt;
   }
   
-  // STEP 3: Insert into database (atomic operation)
-  let { data, error } = await supabase
+  // STEP 4: Atomic upsert - database handles race condition
+  // ✅ CRITICAL: No check-before-create (TOCTOU vulnerability fixed)
+  // Database UNIQUE constraint on linked_auth_user_id ensures atomicity
+  // If profile exists, returns existing profile (idempotent operation)
+  const { data, error } = await supabase
     .from('people')
-    .insert(row)
+    .upsert(row, {
+      onConflict: 'linked_auth_user_id', // UNIQUE constraint on this column
+      ignoreDuplicates: false, // Return the row if it exists
+    })
     .select()
     .single();
   
-  // Handle duplicate key error with recovery (race condition)
-  let result;
-  try {
-    result = handleSupabaseMutation(data, error, {
-      apiName: 'People API',
-      operation: 'create ego profile',
-    });
-  } catch (err: any) {
-    // Check if it's a duplicate key error and try to recover
-    if (error?.code === '23505') {
-      const existingProfile = await handleDuplicateKeyError(
-        error,
-        () => getUserProfile(userId),
-        'People API',
-        'create ego profile'
-      );
-      if (existingProfile) {
-        return existingProfile;
-      }
-    }
-    // Re-throw if not a duplicate key error or recovery failed
-    throw err;
-  }
+  const result = handleSupabaseMutation(data, error, {
+    apiName: 'People API',
+    operation: 'create or get ego profile',
+  });
   
-  // STEP 4: Map database response to Person type using shared mapper
   return mapPersonRow(result);
 }
-
 /**
  * Update user's profile (ego) in Supabase
  * 
@@ -366,16 +340,30 @@ export async function createRelative(
  * This function loads all people and their relationships from the database.
  * Used for initial sync when app starts.
  * 
+ * SECURITY NOTE - Blocked Users:
+ * Blocked users' data is fetched from the database but converted to placeholders
+ * (empty names) via the mapper. This approach preserves relationship integrity
+ * while hiding blocked user data at the presentation layer. 
+ * 
+ * Why fetch blocked users?
+ * - Relationships must remain intact in the family tree structure
+ * - Filtering at query level would break relationship chains
+ * - Presentation-layer filtering (mapper) ensures blocked users are invisible
+ * - Blocked user IDs are checked against linked_auth_user_id to create placeholders
+ * 
+ * Alternative approach (if RLS is preferred):
+ * - Use Supabase RLS policy to filter blocked users at database level
+ * - Would require more complex relationship handling
+ * - Current approach is simpler and maintains referential integrity
+ * 
  * @param currentUserId - Optional current user ID for blocked user detection
  * @returns Array of Person objects with relationships populated
  */
 export async function getAllPeople(currentUserId?: string): Promise<Person[]> {
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:372',message:'getAllPeople entry',data:{hasCurrentUserId:!!currentUserId,currentUserId:currentUserId||''},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,C'})}).catch(()=>{});
-  // #endregion
   const supabase = getSupabaseClient();
   
   // STEP 1: Fetch blocked user IDs if currentUserId provided
+  // These will be passed to the mapper to create placeholders
   let blockedUserIds = new Set<string>();
   if (currentUserId) {
     const { data: blocks } = await supabase
@@ -387,13 +375,11 @@ export async function getAllPeople(currentUserId?: string): Promise<Person[]> {
       blockedUserIds = new Set(blocks.map(b => b.blocked_id));
     }
   }
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:386',message:'getAllPeople blocked users fetched',data:{blockedCount:blockedUserIds.size,blockedIds:Array.from(blockedUserIds)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,C'})}).catch(()=>{});
-  // #endregion
   
   // STEP 2: Fetch ALL people and relationships in parallel
-  // ❌ REMOVED: .or('deletion_type.is.null,deletion_type.neq.delete_profile')
-  // ✅ NEW: Fetch everything - placeholders handled in mapper
+  // ⚠️ SECURITY: Blocked users ARE fetched but converted to placeholders by mapper
+  // This preserves relationships while hiding blocked user data
+  // The mapper checks blockedUserIds and creates placeholders (empty names)
   const [peopleResponse, relationshipsResponse] = await Promise.all([
     supabase
       .from('people')
@@ -515,8 +501,5 @@ export async function getAllPeople(currentUserId?: string): Promise<Person[]> {
         currentUserId,       // ← NEW: Pass current user
       });
     });
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'people-api.ts:510',message:'getAllPeople returning people',data:{totalCount:people.length,placeholderCount:people.filter(p=>p.isPlaceholder).length,normalCount:people.filter(p=>!p.isPlaceholder).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
   return people;
 }

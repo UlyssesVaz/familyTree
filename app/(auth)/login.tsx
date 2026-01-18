@@ -14,7 +14,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
-import GoogleSignInButton from '@/components/auth';
+import GoogleSignInButton, { AppleSignInButton } from '@/components/auth';
 
 export default function LoginScreen() {
   const colorScheme = useColorScheme();
@@ -56,13 +56,30 @@ export default function LoginScreen() {
           </ThemedText>
         </View>
 
-        {/* Native Google Sign-In Button */}
+        {/* Sign-In Buttons */}
         <View style={styles.ssoSection}>
-          <GoogleSignInButton
-            onSignInSuccess={handleSignInSuccess}
-            onSignInError={handleSignInError}
-            disabled={isLoading}
-          />
+          {/* Apple Sign-In (REQUIRED for App Store) - Show first on iOS */}
+          {Platform.OS === 'ios' && (
+            <View style={styles.signInButton}>
+              <AppleSignInButton onSignInSuccess={handleSignInSuccess} />
+            </View>
+          )}
+          
+          {/* Google Sign-In Button */}
+          <View style={styles.signInButton}>
+            <GoogleSignInButton
+              onSignInSuccess={handleSignInSuccess}
+              onSignInError={handleSignInError}
+              disabled={isLoading}
+            />
+          </View>
+          
+          {/* Apple Sign-In (fallback for web/Android) - Show after Google */}
+          {Platform.OS !== 'ios' && (
+            <View style={styles.signInButton}>
+              <AppleSignInButton onSignInSuccess={handleSignInSuccess} />
+            </View>
+          )}
         </View>
 
         {/* Footer */}
@@ -108,6 +125,11 @@ const styles = StyleSheet.create({
   },
   ssoSection: {
     marginBottom: 32,
+    width: '100%',
+    alignItems: 'center',
+    gap: 12,
+  },
+  signInButton: {
     width: '100%',
     alignItems: 'center',
   },
