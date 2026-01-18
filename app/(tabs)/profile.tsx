@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, TouchableOpacity, View, Modal, Alert, Platform, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -14,10 +14,11 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useProfileUpdates } from '@/hooks/use-profile-updates';
 import { useUpdateManagement } from '@/hooks/use-update-management';
-import { usePeopleStore } from '@/stores/people-store';
-import { useRelationshipsStore } from '@/stores/relationships-store';
-import { useUpdatesStore } from '@/stores/updates-store';
-import { useSessionStore } from '@/stores/session-store';
+import { usePeople, usePerson, useUpdatePerson } from '@/hooks/use-people';
+import { countAncestors, countDescendants } from '@/hooks/use-relationships';
+import { useUpdates, useAddUpdate, useUpdateUpdate, useToggleUpdatePrivacy } from '@/hooks/use-updates';
+import { useEgo, useEgoId } from '@/hooks/use-session';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
@@ -29,6 +30,28 @@ import type { Update, Person } from '@/types/family-tree';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
 
+/**
+ * Ego Profile Screen (Profile Tab)
+ * 
+ * Displays the logged-in user's own profile (accessed via Profile tab).
+ * Always shows the ego's profile - never shows other people's profiles.
+ * 
+ * **Key Features:**
+ * - Edit Profile button (only ego can edit their own profile)
+ * - Sign Out button (only shown on ego's profile)
+ * - Location management (only ego manages their location)
+ * - View own updates, stats, and bio
+ * 
+ * **Differences from Person Profile (`app/person/[personId].tsx`):**
+ * - Has HamburgerMenuButton (not back button header)
+ * - Has Edit Profile and Sign Out buttons
+ * - Has location management UI
+ * - No Invite button (ego can't invite themselves)
+ * - No Block/Unblock button (ego can't block themselves)
+ * 
+ * **Note:** This is always the ego's profile. To view other people's profiles,
+ * use `app/person/[personId].tsx` which handles shadow profiles and claimed profiles.
+ */
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -45,16 +68,31 @@ export default function ProfileScreen() {
   const colors = Colors[theme];
   const { signOut, session } = useAuth();
   const { client: statsigClient } = useStatsigClient();
+  const queryClient = useQueryClient();
   
-  const ego = useSessionStore((state) => state.getEgo());
-  const egoId = useSessionStore((state) => state.egoId);
+  const ego = useEgo();
+  const egoId = useEgoId();
+  const { data: peopleArray = [] } = usePeople();
+  const updatePersonMutation = useUpdatePerson();
+  
+  // Create getPerson helper from peopleArray
+  const peopleMap = useMemo(() => {
+    const map = new Map<string, Person>();
+    for (const person of peopleArray) {
+      map.set(person.id, person);
+    }
+    return map;
+  }, [peopleArray]);
+  
+  const getPerson = useCallback((id: string) => peopleMap.get(id), [peopleMap]);
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:after-hooks',message:'React Query hooks initialized',data:{peopleArrayLength:peopleArray?.length,getPersonDefined:typeof getPerson === 'function',peopleMapSize:peopleMap.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2,H3'})}).catch(()=>{});
+  // #endregion
   
   // Profile tab always shows ego's profile (no personId param)
   const person = ego;
   const isEgo = true; // Always true for profile tab
-  const countAncestors = useRelationshipsStore((state) => state.countAncestors);
-  const countDescendants = useRelationshipsStore((state) => state.countDescendants);
-  const updateEgoStore = useSessionStore((state) => state.updateEgo);
   
   // Handle profile updates with photo upload and database save
   const handleUpdateEgo = async (updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>) => {
@@ -73,15 +111,21 @@ export default function ProfileScreen() {
       // - Return updated Person object
       const updatedPerson = await updateEgoProfile(session.user.id, updates);
       
-      // STEP 2: Update Zustand store with the response from database
+      // STEP 2: Update React Query cache with the response from database
       // This ensures local state matches database state
-      updateEgoStore({
-        name: updatedPerson.name,
-        bio: updatedPerson.bio,
+      if (session.user.id && egoId) {
+        updatePersonMutation.mutate({
+          userId: session.user.id,
+          personId: egoId,
+          updates: {
+            name: updatedPerson.name,
+            bio: updatedPerson.bio,
         birthDate: updatedPerson.birthDate,
         gender: updatedPerson.gender,
-        photoUrl: updatedPerson.photoUrl,
-      });
+            photoUrl: updatedPerson.photoUrl,
+          },
+        });
+      }
       
       if (__DEV__) {
         console.log('[Profile] Profile updated successfully');
@@ -119,14 +163,13 @@ export default function ProfileScreen() {
       );
     }
   };
-  const addUpdate = useUpdatesStore((state) => state.addUpdate);
-  const toggleUpdatePrivacy = useUpdatesStore((state) => state.toggleUpdatePrivacy);
-  const updateUpdate = useUpdatesStore((state) => state.updateUpdate);
-  const getPerson = usePeopleStore((state) => state.getPerson);
-  const toggleTaggedUpdateVisibility = useUpdatesStore((state) => state.toggleTaggedUpdateVisibility);
+  const addUpdateMutation = useAddUpdate();
+  const toggleUpdatePrivacyMutation = useToggleUpdatePrivacy();
+  const updateUpdateMutation = useUpdateUpdate();
+  const { data: updates = [] } = useUpdates();
   
   // Use custom hook to get updates for the profile person
-  const { updates, updateCount } = useProfileUpdates(egoId);
+  const { updates: profileUpdates, updateCount } = useProfileUpdates(egoId);
   
   // Use centralized update management hook
   const {
@@ -142,9 +185,7 @@ export default function ProfileScreen() {
     setPendingDeleteId,
   } = useUpdateManagement();
   
-  // Subscribe to people Map for other uses
-  const people = usePeopleStore((state) => state.people);
-  const peopleArray = Array.from(people.values());
+  // People array already loaded above
 
   // Extract location from bio if present
   useEffect(() => {
@@ -274,8 +315,8 @@ export default function ProfileScreen() {
     );
   }
 
-  const ancestorsCount = person ? countAncestors(person.id) : 0;
-  const descendantsCount = person ? countDescendants(person.id) : 0;
+  const ancestorsCount = person ? countAncestors(person.id, peopleArray) : 0;
+  const descendantsCount = person ? countDescendants(person.id, peopleArray) : 0;
 
   const genderColor = getGenderColor(person?.gender, colors.icon);
   const backgroundColor = colors.background;
@@ -293,7 +334,7 @@ export default function ProfileScreen() {
         <ThemedView style={[styles.container, { paddingTop: contentPaddingTop }]}>
         {/* Username at top */}
         <ThemedText type="defaultSemiBold" style={styles.username}>
-          {person.name.toLowerCase().replace(/\s+/g, '')}
+          {(person.name || 'user').toLowerCase().replace(/\s+/g, '')}
         </ThemedText>
 
         {/* Profile Section */}
@@ -366,7 +407,7 @@ export default function ProfileScreen() {
         {/* Name and Bio */}
         <View style={styles.infoSection}>
           <ThemedText type="defaultSemiBold" style={styles.displayName}>
-            {person.name}
+            {person.name || 'Profile'}
           </ThemedText>
           
           {/* Location Display */}
@@ -585,14 +626,26 @@ export default function ProfileScreen() {
                           >
                             {/* For tagged updates, show hide/show option */}
                             {menuPermissions.canToggleTaggedVisibility && (
-                              <Pressable
-                                onPress={(e) => {
-                                  e.stopPropagation();
-                                  if (person?.id) {
-                                    toggleTaggedUpdateVisibility(person.id, update.id);
-                                  }
-                                  setMenuUpdateId(null);
-                                }}
+                                <Pressable
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    if (person?.id && session?.user?.id) {
+                                      const hiddenIds = person.hiddenTaggedUpdateIds || [];
+                                      const isHidden = hiddenIds.includes(update.id);
+                                      const newHiddenIds = isHidden
+                                        ? hiddenIds.filter(id => id !== update.id)
+                                        : [...hiddenIds, update.id];
+                                      
+                                      updatePersonMutation.mutate({
+                                        userId: session.user.id,
+                                        personId: person.id,
+                                        updates: {
+                                          hiddenTaggedUpdateIds: newHiddenIds,
+                                        },
+                                      });
+                                    }
+                                    setMenuUpdateId(null);
+                                  }}
                                 style={styles.menuItem}
                               >
                                 <MaterialIcons
@@ -612,7 +665,7 @@ export default function ProfileScreen() {
                                 onPress={async (e) => {
                                   e.stopPropagation();
                                   try {
-                                    await toggleUpdatePrivacy(update.id);
+                                    await toggleUpdatePrivacyMutation.mutateAsync({ updateId: update.id });
                                   } catch (error: any) {
                                     Alert.alert('Error', 'Failed to change update visibility. Please try again.');
                                   }
@@ -777,7 +830,17 @@ export default function ProfileScreen() {
             personId={egoId || undefined}
             onAdd={async (title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
               if (egoId && session?.user?.id) {
-                await addUpdate(egoId, title, photoUrl, caption, isPublic, taggedPersonIds, session.user.id);
+                await addUpdateMutation.mutateAsync({
+                  userId: session.user.id,
+                  input: {
+                    personId: egoId,
+                    title,
+                    photoUrl,
+                    caption,
+                    isPublic,
+                    taggedPersonIds: taggedPersonIds || [],
+                  },
+                });
                 
                 // Track event: update_posted
                 logStatsigEvent(statsigClient, 'update_posted', undefined, {
@@ -791,23 +854,29 @@ export default function ProfileScreen() {
             }}
             onEdit={async (updateId: string, title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
               try {
-                await updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+                await updateUpdateMutation.mutateAsync({
+                  updateId,
+                  title,
+                  photoUrl,
+                  caption,
+                  isPublic,
+                  taggedPersonIds,
+                });
+                
+                // Track event: wall_entry_updated
+                const update = updates.find(u => u.id === updateId);
+                const isOnOtherWall = update?.personId !== egoId;
+                const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
+                
+                logStatsigEvent(statsigClient, 'wall_entry_updated', undefined, {
+                  isOnOtherWall,
+                  hasTagging,
+                  taggedCount: taggedPersonIds?.length ?? 0,
+                });
               } catch (error: any) {
                 Alert.alert('Error', 'Failed to update post. Please try again.');
                 return;
               }
-              
-              // Track event: wall_entry_updated
-              const update = useUpdatesStore.getState().updates.get(updateId);
-              const currentEgoId = useSessionStore.getState().egoId;
-              const isOnOtherWall = update?.personId !== currentEgoId;
-              const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
-              
-              logStatsigEvent(statsigClient, 'wall_entry_updated', undefined, {
-                isOnOtherWall,
-                hasTagging,
-                taggedCount: taggedPersonIds?.length ?? 0,
-              });
             }}
           />
 
@@ -836,8 +905,8 @@ export default function ProfileScreen() {
                 description,
               });
               
-              // Immediately hide reported update from local store
-              useUpdatesStore.getState().hideReportedUpdate(reportUpdateId!);
+              // Invalidate updates cache to refresh (reported update will be filtered out by backend)
+              queryClient.invalidateQueries({ queryKey: ['updates', session.user.id] });
               
               Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report. The content has been hidden from your feed.');
                 } catch (error: any) {

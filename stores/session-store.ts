@@ -13,6 +13,7 @@ import { getAllUpdates } from '@/services/supabase/updates-api';
 import { usePeopleStore } from './people-store';
 import { useUpdatesStore } from './updates-store';
 import type { AccountDeletionStatus } from '@/services/supabase/account-api';
+import type { Update } from '@/types/family-tree';
 
 interface SessionStore {
   /** ID of the ego (focal person) - null if not initialized */
@@ -168,6 +169,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         }
         
         // Update stores with data from backend
+        // NOTE: During React Query migration, Zustand is still updated here for backward compatibility
+        // React Query cache is updated via mutations and will refetch via useUpdates() hook when components mount
         usePeopleStore.getState().setPeople(peopleFromBackend);
         useUpdatesStore.getState().setUpdates(updatesFromBackend);
         

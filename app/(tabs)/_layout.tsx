@@ -8,10 +8,10 @@ import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useSessionStore } from '@/stores/session-store';
+import { useEgo } from '@/hooks/use-session';
 
 function ProfileTabIcon({ color }: { color: string }) {
-  const ego = useSessionStore((state) => state.getEgo());
+  const ego = useEgo();
   
   if (ego?.photoUrl) {
     return (

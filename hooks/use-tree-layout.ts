@@ -16,8 +16,8 @@
  */
 
 import { useMemo } from 'react';
-import { usePeopleStore } from '@/stores/people-store';
-import { useRelationshipsStore } from '@/stores/relationships-store';
+import { usePeople } from './use-people';
+import { getSiblings } from './use-relationships';
 import type { Person } from '@/types/family-tree';
 
 export interface TreeLayout {
@@ -46,20 +46,23 @@ export interface TreeLayout {
  * @returns TreeLayout object with all calculated relationships
  */
 export function useTreeLayout(egoId: string | null): TreeLayout {
-  // Only subscribe to peopleSize, not the people Map itself (prevents constant re-renders)
-  // The people Map reference changes on every update, but size only changes when people are added/removed
-  const peopleSize = usePeopleStore((state) => state.people.size);
+  // Use React Query to get all people
+  const { data: peopleArray = [] } = usePeople();
   
-  // CRITICAL FIX: Track relationship changes AND placeholder changes
-  // When relationships are added, peopleSize doesn't change, but relationship arrays do
-  // When isPlaceholder changes (block/unblock), peopleSize doesn't change either
-  // We need to recalculate when relationships OR placeholder flags change
-  // Use a stable hash that detects both relationship and placeholder changes
-  const relationshipsHash = usePeopleStore((state) => {
-    // Create a stable hash string of all relationship IDs AND placeholder flags
-    // Sorting ensures stable hash even if order changes
+  // Create a Map for efficient lookups
+  const peopleMap = useMemo(() => {
+    const map = new Map<string, Person>();
+    for (const person of peopleArray) {
+      map.set(person.id, person);
+    }
+    return map;
+  }, [peopleArray]);
+  
+  // CRITICAL: Track relationship changes AND placeholder changes
+  // Create a stable hash that detects both relationship and placeholder changes
+  const relationshipsHash = useMemo(() => {
     const allRelationshipIds: string[] = [];
-    for (const person of state.people.values()) {
+    for (const person of peopleArray) {
       // Include counts and IDs for each relationship type
       allRelationshipIds.push(`${person.id}:parents:${person.parentIds.length}:${person.parentIds.sort().join(',')}`);
       allRelationshipIds.push(`${person.id}:children:${person.childIds.length}:${person.childIds.sort().join(',')}`);
@@ -78,16 +81,13 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       hash = hash & hash; // Convert to 32-bit integer
     }
     return hash;
-  });
+  }, [peopleArray]);
 
-  // Get ego person - recalculate when egoId, peopleSize, or relationships change
-  // Access people from store state inside memo (getState() doesn't cause re-renders)
+  // Get ego person
   const ego = useMemo(() => {
     if (!egoId) return null;
-    const people = usePeopleStore.getState().people;
-    const egoPerson = people.get(egoId) || null;
-    return egoPerson;
-  }, [egoId, peopleSize, relationshipsHash]);
+    return peopleMap.get(egoId) || null;
+  }, [egoId, peopleMap, relationshipsHash]);
 
   // Recursively get all ancestor generations (parents, grandparents, etc.)
   // Includes siblings of each person in each generation
@@ -111,7 +111,7 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       
       // For each person, add their siblings
       for (const person of baseGeneration) {
-        const siblings = getSiblings(person.id);
+        const siblings = getSiblings(person.id, peopleArray);
         for (const sibling of siblings) {
           if (!visited.has(sibling.id) && !expanded.has(sibling.id)) {
             expanded.set(sibling.id, sibling);
@@ -123,16 +123,15 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       return Array.from(expanded.values());
     };
     
-    // Get store methods inside memo (getState() doesn't cause re-renders)
-    const getPerson = usePeopleStore.getState().getPerson;
-    const getSiblings = useRelationshipsStore.getState().getSiblings;
+    // Helper to get person by ID
+    const getPerson = (id: string) => peopleMap.get(id);
       
-      // Start with ego's parents (generation 0) and expand with siblings
-      let currentGeneration = expandGenerationWithSiblings(
-        ego.parentIds
-          .map((id) => getPerson(id))
-          .filter((p): p is NonNullable<typeof p> => p !== undefined)
-      );
+    // Start with ego's parents (generation 0) and expand with siblings
+    let currentGeneration = expandGenerationWithSiblings(
+      ego.parentIds
+        .map((id) => getPerson(id))
+        .filter((p): p is NonNullable<typeof p> => p !== undefined)
+    );
     
     // Keep going up generations until no more parents
     while (currentGeneration.length > 0) {
@@ -167,18 +166,14 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
     // }
     
     return result;
-    // Recalculate when ego, peopleSize, or relationships change
+    // Recalculate when ego, people, or relationships change
     // relationshipsHash ensures we recalculate when relationships are added/removed
-  }, [egoId, peopleSize, relationshipsHash, ego?.id]);
+  }, [egoId, peopleArray, relationshipsHash, ego?.id]);
 
   // Recursively get all descendant generations (children, grandchildren, etc.)
   // Includes siblings of each person in each generation
   const descendantGenerations = useMemo(() => {
     if (!ego) return [];
-    
-    // Get store methods inside memo (getState() doesn't cause re-renders)
-    const getPerson = usePeopleStore.getState().getPerson;
-    const getSiblings = useRelationshipsStore.getState().getSiblings;
     
     const generations: Person[][] = [];
     const visited = new Set<string>();
@@ -195,7 +190,7 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       
       // For each person, add their siblings
       for (const person of baseGeneration) {
-        const siblings = getSiblings(person.id);
+        const siblings = getSiblings(person.id, peopleArray);
         for (const sibling of siblings) {
           if (!visited.has(sibling.id) && !expanded.has(sibling.id)) {
             expanded.set(sibling.id, sibling);
@@ -207,12 +202,15 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       return Array.from(expanded.values());
     };
     
-      // Start with ego's children (generation 0) and expand with siblings
-      let currentGeneration = expandGenerationWithSiblings(
-        ego.childIds
-          .map((id) => getPerson(id))
-          .filter((p): p is NonNullable<typeof p> => p !== undefined)
-      );
+    // Helper to get person by ID
+    const getPerson = (id: string) => peopleMap.get(id);
+    
+    // Start with ego's children (generation 0) and expand with siblings
+    let currentGeneration = expandGenerationWithSiblings(
+      ego.childIds
+        .map((id) => getPerson(id))
+        .filter((p): p is NonNullable<typeof p> => p !== undefined)
+    );
     
     // Keep going down generations until no more children
     while (currentGeneration.length > 0) {
@@ -239,15 +237,10 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       currentGeneration = expandGenerationWithSiblings(nextGenerationBase);
     }
     
-    // Debug logs removed to reduce noise - uncomment if needed for debugging
-    // if (__DEV__) {
-    //   console.log(`[Tree] getAllDescendantGenerations: Calculated ${generations.length} generations`);
-    // }
-    
     return generations;
-    // Recalculate when ego, peopleSize, or relationships change
+    // Recalculate when ego, people, or relationships change
     // relationshipsHash ensures we recalculate when relationships are added/removed
-  }, [egoId, peopleSize, relationshipsHash, ego?.id]);
+  }, [egoId, peopleArray, relationshipsHash, ego?.id, peopleMap]);
 
   // Get ego's immediate relationships (for ego row)
   const { spouses, siblings } = useMemo(() => {
@@ -255,18 +248,14 @@ export function useTreeLayout(egoId: string | null): TreeLayout {
       return { spouses: [], siblings: [] };
     }
 
-    // Get store methods inside memo (getState() doesn't cause re-renders)
-    const getPerson = usePeopleStore.getState().getPerson;
-    const getSiblings = useRelationshipsStore.getState().getSiblings;
-
     const spouses = ego.spouseIds
-      .map((id) => getPerson(id))
+      .map((id) => peopleMap.get(id))
       .filter((p): p is NonNullable<typeof p> => p !== undefined);
 
-    const siblings = getSiblings(ego.id);
+    const siblings = getSiblings(ego.id, peopleArray);
 
     return { spouses, siblings };
-  }, [ego, peopleSize, relationshipsHash]); // Recalculate when relationships change
+  }, [ego, peopleArray, relationshipsHash, peopleMap]); // Recalculate when relationships change
 
   return {
     ancestorGenerations,

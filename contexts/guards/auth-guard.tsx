@@ -10,7 +10,7 @@
 import { useEffect } from 'react';
 import { useRouter, useSegments } from 'expo-router';
 import { useAuth } from '@/contexts/auth-context';
-import { useSessionStore } from '@/stores/session-store';
+import { useEgo } from '@/hooks/use-session';
 
 /**
  * Auth Guard Component
@@ -24,11 +24,11 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { session, isLoading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  const isSyncing = useSessionStore((state) => state.isSyncing);
+  const ego = useEgo();
 
   useEffect(() => {
-    // Wait for auth check AND sync to complete before making routing decisions
-    if (isLoading || isSyncing) {
+    // Wait for auth check to complete before making routing decisions
+    if (isLoading) {
       return;
     }
 
@@ -39,11 +39,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
     if (!session) {
       // NOT AUTHENTICATED: Must go to age gate first (COPPA compliance)
-      // Clear any stale ego data when not authenticated
-      const ego = useSessionStore.getState().getEgo();
-      if (ego) {
-        useSessionStore.getState().clearEgo();
-      }
+      // Ego will be null automatically when not authenticated (React Query won't have data)
       
       // Redirect to age gate if not already in auth group (age gate will handle routing to login)
       // Age gate screen will check AsyncStorage and redirect to login if already passed
@@ -54,15 +50,12 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       // AUTHENTICATED: Only guard tabs access (security check)
       // If they somehow get to tabs without a profile, redirect to onboarding
       if (inTabsGroup) {
-        const ego = useSessionStore.getState().getEgo();
         const currentUserId = session.user.id;
-        const egoId = ego?.id;
         const isEgoForCurrentUser = ego?.linkedAuthUserId === currentUserId;
         const hasValidProfile = !!ego && isEgoForCurrentUser;
         
         if (!hasValidProfile) {
           // Trying to access tabs without valid profile - redirect to onboarding
-          useSessionStore.getState().clearEgo();
           router.replace('/(onboarding)/welcome');
         }
       } else if (inAuthGroup) {
@@ -71,9 +64,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       }
       // Otherwise, let them navigate freely (onboarding flow, etc.)
     }
-    // Include isSyncing in dependencies so guard waits for sync completion
-    // Only depend on session, isLoading, and isSyncing - segments accessed inside effect to avoid constant re-runs
-  }, [session, isLoading, isSyncing, router]);
+    // Only depend on session, isLoading, and ego - segments accessed inside effect to avoid constant re-runs
+  }, [session, isLoading, ego, router]);
 
   return <>{children}</>;
 }

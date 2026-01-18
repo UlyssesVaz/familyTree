@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, Modal, Alert, Platform, Share } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -10,10 +10,10 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useProfileUpdates } from '@/hooks/use-profile-updates';
-import { usePeopleStore } from '@/stores/people-store';
-import { useRelationshipsStore } from '@/stores/relationships-store';
-import { useUpdatesStore } from '@/stores/updates-store';
-import { useSessionStore } from '@/stores/session-store';
+import { usePeople, usePerson, useUpdatePerson } from '@/hooks/use-people';
+import { countAncestors, countDescendants } from '@/hooks/use-relationships';
+import { useUpdates, useDeleteUpdate, useAddUpdate, useToggleUpdatePrivacy } from '@/hooks/use-updates';
+import { useEgoId } from '@/hooks/use-session';
 import { formatMentions } from '@/utils/format-mentions';
 import { getGenderColor } from '@/utils/gender-utils';
 import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
@@ -25,8 +25,36 @@ import type { Person, Update } from '@/types/family-tree';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
 import { blockUser, unblockUser, getBlock } from '@/services/supabase/blocks-api';
-import { useBlockedUsersStore } from '@/stores/blocked-users-store';
+import { useBlockedUserIds, useUnblockUser } from '@/hooks/use-blocked-users';
+import { useQueryClient } from '@tanstack/react-query';
 
+/**
+ * Person Profile Screen
+ * 
+ * Displays a profile for ANY person in the family tree (accessed via /person/[personId]).
+ * 
+ * **Profile Types Handled:**
+ * 1. **Shadow Profiles (Ancestors)**: `linkedAuthUserId === null`
+ *    - Ancestors who don't have accounts yet
+ *    - Shows "Invite" button to send invitation link
+ *    - Can view their updates/stats but cannot block them
+ * 
+ * 2. **Claimed Profiles (Living users)**: `linkedAuthUserId !== null`
+ *    - People with accounts in the app
+ *    - Shows Block/Unblock button (if not ego)
+ *    - Can interact with their content
+ * 
+ * **Differences from Ego Profile (`app/(tabs)/profile.tsx`):**
+ * - Has back button header (not hamburger menu)
+ * - Has Invite button for shadow profiles
+ * - Has Block/Unblock button for claimed profiles
+ * - No Edit Profile button (can't edit others' profiles)
+ * - No Sign Out button (not ego's profile)
+ * - No location management (only ego manages location)
+ * 
+ * **Note:** This screen is accessed when tapping on any person card in the family tree.
+ * The Profile tab (`app/(tabs)/profile.tsx`) always shows the ego's own profile.
+ */
 export default function PersonProfileModal() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -39,18 +67,30 @@ export default function PersonProfileModal() {
   const { session } = useAuth();
   const { client: statsigClient } = useStatsigClient();
   
-  const egoId = useSessionStore((state) => state.egoId);
-  const getPerson = usePeopleStore((state) => state.getPerson);
-  const countAncestors = useRelationshipsStore((state) => state.countAncestors);
-  const countDescendants = useRelationshipsStore((state) => state.countDescendants);
-  const toggleTaggedUpdateVisibility = useUpdatesStore((state) => state.toggleTaggedUpdateVisibility);
-  const addUpdate = useUpdatesStore((state) => state.addUpdate);
-  const people = usePeopleStore((state) => state.people);
-  const peopleArray = Array.from(people.values());
+  const egoId = useEgoId();
+  const queryClient = useQueryClient();
+  const { data: peopleArray = [] } = usePeople();
+  const person: Person | null = personId ? usePerson(personId) || null : null;
+  const unblockMutation = useUnblockUser();
+  const addUpdateMutation = useAddUpdate();
+  const toggleUpdatePrivacyMutation = useToggleUpdatePrivacy();
+  const deleteUpdateMutation = useDeleteUpdate();
+  const updatePersonMutation = useUpdatePerson();
+  const blockedUserIds = useBlockedUserIds(); // Must be at top level, not in useEffect!
+  
+  // Create getPerson helper from peopleArray
+  const peopleMap = useMemo(() => {
+    const map = new Map<string, Person>();
+    for (const person of peopleArray) {
+      map.set(person.id, person);
+    }
+    return map;
+  }, [peopleArray]);
+  
+  const getPerson = useCallback((id: string) => peopleMap.get(id), [peopleMap]);
   
   // Use custom hook to get updates for this person (must be called after personId is defined)
   const { updates: personUpdates, updateCount } = useProfileUpdates(personId);
-  const person: Person | null = personId ? getPerson(personId) || null : null;
   const isEgo = personId === egoId;
 
   const [expandedUpdateId, setExpandedUpdateId] = useState<string | null>(null);
@@ -63,10 +103,18 @@ export default function PersonProfileModal() {
   const [isCheckingBlock, setIsCheckingBlock] = useState(true);
 
   // Use ref to avoid stale closure in useEffect
-  const deleteUpdateRef = useRef(useUpdatesStore.getState().deleteUpdate);
+  const deleteUpdateRef = useRef((updateId: string) => {
+    if (session?.user?.id) {
+      deleteUpdateMutation.mutate({ updateId });
+    }
+  });
   useEffect(() => {
-    deleteUpdateRef.current = useUpdatesStore.getState().deleteUpdate;
-  }, []);
+    deleteUpdateRef.current = (updateId: string) => {
+      if (session?.user?.id) {
+        deleteUpdateMutation.mutate({ updateId });
+      }
+    };
+  }, [deleteUpdateMutation, session?.user?.id]);
 
   // Check if we should open Add Update modal from navigation params (for Add Story feature)
   useEffect(() => {
@@ -120,8 +168,8 @@ export default function PersonProfileModal() {
       return;
     }
 
-    // Use store for instant block status (reactive)
-    const isBlockedInStore = useBlockedUsersStore.getState().isBlocked(person.linkedAuthUserId);
+    // Use React Query for block status (blockedUserIds is already defined at top level)
+    const isBlockedInStore = person.linkedAuthUserId ? blockedUserIds.has(person.linkedAuthUserId) : false;
     setIsBlocked(isBlockedInStore);
     setIsCheckingBlock(false);
     
@@ -132,11 +180,20 @@ export default function PersonProfileModal() {
         const isActuallyBlocked = !!block;
         setIsBlocked(isActuallyBlocked);
         
-        // Sync store if backend says different
-        if (isActuallyBlocked && !isBlockedInStore) {
-          useBlockedUsersStore.getState().addBlockedUser(person.linkedAuthUserId);
-        } else if (!isActuallyBlocked && isBlockedInStore) {
-          useBlockedUsersStore.getState().removeBlockedUser(person.linkedAuthUserId);
+        // Sync React Query cache if backend says different
+        if (person.linkedAuthUserId) {
+          const userId = session?.user?.id;
+          if (userId) {
+            if (isActuallyBlocked && !isBlockedInStore) {
+              // Invalidate to refetch blocked users
+              queryClient.invalidateQueries({ queryKey: ['blockedUserIds', userId] });
+              queryClient.invalidateQueries({ queryKey: ['blockedUsers', userId] });
+            } else if (!isActuallyBlocked && isBlockedInStore) {
+              // Invalidate to refetch blocked users
+              queryClient.invalidateQueries({ queryKey: ['blockedUserIds', userId] });
+              queryClient.invalidateQueries({ queryKey: ['blockedUsers', userId] });
+            }
+          }
         }
       } catch (error) {
         console.error('[PersonProfile] Error checking block status:', error);
@@ -145,13 +202,9 @@ export default function PersonProfileModal() {
 
     checkBlockStatus();
     
-    // Subscribe to store changes for reactive updates
-    const unsubscribe = useBlockedUsersStore.subscribe((state) => {
-      setIsBlocked(state.isBlocked(person.linkedAuthUserId));
-    });
-
-    return () => unsubscribe();
-  }, [session?.user?.id, person?.linkedAuthUserId, isEgo]);
+    // React Query automatically handles reactivity through queries
+    // No need to subscribe manually - removed unused unsubscribe()
+  }, [session?.user?.id, person?.linkedAuthUserId, isEgo, blockedUserIds, queryClient]);
 
   // If no person found, show error
   // CRITICAL: All hooks must be called BEFORE any early returns
@@ -185,9 +238,10 @@ export default function PersonProfileModal() {
       return;
     }
 
+    const personName = person.name || 'this user';
     Alert.alert(
       'Block User',
-      `Are you sure you want to block ${person.name}? You won't be able to see their content, and they won't be able to see yours.`,
+      `Are you sure you want to block ${personName}? You won't be able to see their content, and they won't be able to see yours.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -195,43 +249,43 @@ export default function PersonProfileModal() {
           style: 'destructive',
           onPress: async () => {
             const blockedUserId = person.linkedAuthUserId;
+            const userId = session.user.id;
+            const originalPersonName = person.name || 'User';
             
-            // STEP 1: OPTIMISTIC UPDATE - Mark person as placeholder in PeopleStore
-            // This makes them appear as grey circle immediately (not opacity greying)
-            const people = usePeopleStore.getState().people;
-            let originalPersonName: string | undefined;
+            // Optimistic update: Update person as placeholder and update blocked users cache
+            queryClient.setQueryData<Person[]>(['people', userId], (old = []) =>
+              old.map((p) => {
+                if (p.linkedAuthUserId === blockedUserId) {
+                  return {
+                    ...p,
+                    isPlaceholder: true,
+                    placeholderReason: 'blocked',
+                    name: '',
+                  };
+                }
+                return p;
+              })
+            );
             
-            for (const [personId, existingPerson] of people.entries()) {
-              if (existingPerson.linkedAuthUserId === blockedUserId) {
-                // Preserve original name for error recovery
-                originalPersonName = existingPerson.name;
-                
-                const placeholderPerson: Person = {
-                  ...existingPerson,
-                  isPlaceholder: true,
-                  placeholderReason: 'blocked',
-                  name: '', // Clear name for privacy
-                  // Keep relationships intact for tree structure
-                };
-                usePeopleStore.getState().updatePerson(placeholderPerson);
-                break;
-              }
-            }
+            queryClient.setQueryData<Set<string>>(['blockedUserIds', userId], (old = new Set()) => {
+              const newSet = new Set(old);
+              newSet.add(blockedUserId);
+              return newSet;
+            });
             
-            // STEP 2: OPTIMISTIC UPDATE - Remove updates from blocked user
-            // This makes their posts disappear immediately from the feed
-            useUpdatesStore.getState().removeBlockedUserUpdates(blockedUserId);
-            
-            // STEP 3: OPTIMISTIC UPDATE - Update blocked users store
-            useBlockedUsersStore.getState().addBlockedUser(blockedUserId);
             setIsBlocked(true);
             
             try {
-              // STEP 4: Sync with backend in background
-              await blockUser(session.user.id, blockedUserId);
+              // Sync with backend
+              await blockUser(userId, blockedUserId);
               
-              // Success - state already updated optimistically
-              Alert.alert('User Blocked', `${originalPersonName || person.name} has been blocked. Their content will no longer appear in your feed. You can manage blocked users in Settings.`);
+              // Invalidate to refresh data
+              queryClient.invalidateQueries({ queryKey: ['blockedUsers', userId] });
+              queryClient.invalidateQueries({ queryKey: ['blockedUserIds', userId] });
+              queryClient.invalidateQueries({ queryKey: ['updates', userId] });
+              
+              // Success
+              Alert.alert('User Blocked', `${originalPersonName} has been blocked. Their content will no longer appear in your feed. You can manage blocked users in Settings.`);
               logStatsigEvent(statsigClient, 'user_blocked', {
                 blocked_user_id: blockedUserId,
               });
@@ -239,23 +293,9 @@ export default function PersonProfileModal() {
               // Navigate back since user is now blocked
               router.back();
             } catch (error: any) {
-              // REVERT: If backend fails, restore person and remove from blocked list
-              const people = usePeopleStore.getState().people;
-              for (const [personId, existingPerson] of people.entries()) {
-                if (existingPerson.linkedAuthUserId === blockedUserId) {
-                  // Restore original person data with preserved name
-                  const restoredPerson: Person = {
-                    ...existingPerson,
-                    isPlaceholder: false,
-                    placeholderReason: undefined,
-                    name: originalPersonName || person.name, // Restore original name
-                  };
-                  usePeopleStore.getState().updatePerson(restoredPerson);
-                  break;
-                }
-              }
-              
-              useBlockedUsersStore.getState().removeBlockedUser(blockedUserId);
+              // REVERT: Restore optimistic updates on error
+              queryClient.invalidateQueries({ queryKey: ['people', userId] });
+              queryClient.invalidateQueries({ queryKey: ['blockedUserIds', userId] });
               setIsBlocked(false);
               
               console.error('[PersonProfile] Error blocking user:', error);
@@ -273,9 +313,10 @@ export default function PersonProfileModal() {
       return;
     }
 
+    const personName = person.name || 'this user';
     Alert.alert(
       'Unblock User',
-      `Are you sure you want to unblock ${person.name}? You will be able to see their content again.`,
+      `Are you sure you want to unblock ${personName}? You will be able to see their content again.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -283,35 +324,33 @@ export default function PersonProfileModal() {
           onPress: async () => {
             const blockedUserId = person.linkedAuthUserId;
             
-            // OPTIMISTIC UPDATE: Immediately update local state for instant UI feedback
-            useBlockedUsersStore.getState().removeBlockedUser(blockedUserId);
-            setIsBlocked(false);
-            
-            try {
-              // Sync with backend in background
-              await unblockUser(session.user.id, blockedUserId);
-              
-              // Success - state already updated optimistically
-              Alert.alert('User Unblocked', `${person.name} has been unblocked. Their content will now appear in your feed.`);
-              logStatsigEvent(statsigClient, 'user_unblocked', {
-                unblocked_user_id: blockedUserId,
-              });
-            } catch (error: any) {
-              // REVERT: If backend fails, add back to local state
-              useBlockedUsersStore.getState().addBlockedUser(blockedUserId);
-              setIsBlocked(true);
-              
-              console.error('[PersonProfile] Error unblocking user:', error);
-              Alert.alert('Error', error.message || 'Failed to unblock user. Please try again.');
-            }
+            // Use React Query mutation for unblocking (handles optimistic updates automatically)
+            unblockMutation.mutate(
+              { blockedUserId },
+              {
+                onSuccess: () => {
+                  setIsBlocked(false);
+                  const personName = person.name || 'User';
+                  Alert.alert('User Unblocked', `${personName} has been unblocked. Their content will now appear in your feed.`);
+                  logStatsigEvent(statsigClient, 'user_unblocked', {
+                    unblocked_user_id: blockedUserId,
+                  });
+                },
+                onError: (error: any) => {
+                  setIsBlocked(true);
+                  console.error('[PersonProfile] Error unblocking user:', error);
+                  Alert.alert('Error', error.message || 'Failed to unblock user. Please try again.');
+                },
+              }
+            );
           },
         },
       ]
     );
   };
 
-  const ancestorsCount = countAncestors(person.id);
-  const descendantsCount = countDescendants(person.id);
+  const ancestorsCount = countAncestors(person.id, peopleArray);
+  const descendantsCount = countDescendants(person.id, peopleArray);
 
   const genderColor = getGenderColor(person.gender, colors.icon);
   const backgroundColor = colors.background;
@@ -326,7 +365,7 @@ export default function PersonProfileModal() {
           <MaterialIcons name="arrow-back" size={24} color={colors.text} />
         </Pressable>
         <ThemedText type="defaultSemiBold" style={styles.headerTitle}>
-          {person.name}
+          {person.name || 'Profile'}
         </ThemedText>
         {/* Block/Unblock button (only for non-ego profiles with linked auth users) */}
         {!isEgo && person.linkedAuthUserId && !isCheckingBlock && (
@@ -354,7 +393,7 @@ export default function PersonProfileModal() {
         <ThemedView style={[styles.container, { paddingTop: contentPaddingTop }]}>
           {/* Username at top */}
           <ThemedText type="defaultSemiBold" style={styles.username}>
-            {person.name.toLowerCase().replace(/\s+/g, '')}
+            {(person.name || 'user').toLowerCase().replace(/\s+/g, '')}
           </ThemedText>
 
           {/* Profile Section */}
@@ -401,7 +440,7 @@ export default function PersonProfileModal() {
           <View style={styles.infoSection}>
             <View style={styles.nameRow}>
               <ThemedText type="defaultSemiBold" style={styles.displayName}>
-                {person.name}
+                {person.name || 'Profile'}
               </ThemedText>
               {/* Invite button - only show for ancestor profiles (no linkedAuthUserId) */}
               {!person.linkedAuthUserId && session?.user?.id && (
@@ -417,12 +456,13 @@ export default function PersonProfileModal() {
 
                       // Generate invitation URL
                       const inviteUrl = `familytreeapp://join/${invitation.token}`;
-                      const inviteMessage = `Hi ${person.name}! I've added you to our family tree. Join us to see and contribute to our shared family history!\n\n${inviteUrl}`;
+                      const personName = person.name || 'there';
+                      const inviteMessage = `Hi ${personName}! I've added you to our family tree. Join us to see and contribute to our shared family history!\n\n${inviteUrl}`;
 
                       // Share invitation
                       await Share.share({
                         message: inviteMessage,
-                        title: `Invite ${person.name} to Family Tree`,
+                        title: `Invite ${personName} to Family Tree`,
                         // Don't include url parameter - it causes duplication on iOS
                         // The URL is already in the message text
                       });
@@ -634,7 +674,21 @@ export default function PersonProfileModal() {
                                 <Pressable
                                   onPress={(e) => {
                                     e.stopPropagation();
-                                    toggleTaggedUpdateVisibility(person.id, update.id);
+                                    if (session?.user?.id) {
+                                      const hiddenIds = person.hiddenTaggedUpdateIds || [];
+                                      const isHidden = hiddenIds.includes(update.id);
+                                      const newHiddenIds = isHidden
+                                        ? hiddenIds.filter(id => id !== update.id)
+                                        : [...hiddenIds, update.id];
+                                      
+                                      updatePersonMutation.mutate({
+                                        userId: session.user.id,
+                                        personId: person.id,
+                                        updates: {
+                                          hiddenTaggedUpdateIds: newHiddenIds,
+                                        },
+                                      });
+                                    }
                                     setMenuUpdateId(null);
                                   }}
                                   style={styles.menuItem}
@@ -743,7 +797,7 @@ export default function PersonProfileModal() {
           onClose={() => {
             setIsAddingUpdate(false);
           }}
-          onAdd={(title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
+          onAdd={async (title: string, photoUrl: string, caption?: string, isPublic?: boolean, taggedPersonIds?: string[]) => {
             if (!personId || !session?.user?.id) {
               console.error('[PersonProfile] Cannot add update: Missing personId or session');
               return;
@@ -760,7 +814,17 @@ export default function PersonProfileModal() {
             // CRITICAL: Post update on target person's wall (personId = user_id in updates table)
             // created_by will be session.user.id (the authenticated user posting)
             // This enables posting updates on anyone's wall, not just the ego user
-            addUpdate(personId, title, photoUrl, caption, isPublic, finalTaggedPersonIds, session.user.id);
+            await addUpdateMutation.mutateAsync({
+              userId: session.user.id,
+              input: {
+                personId,
+                title,
+                photoUrl,
+                caption,
+                isPublic,
+                taggedPersonIds: finalTaggedPersonIds,
+              },
+            });
             
             // Track event: update_posted
             const isOnOtherWall = personId !== egoId;
@@ -802,8 +866,10 @@ export default function PersonProfileModal() {
                 description,
               });
               
-              // Immediately hide reported update from local store
-              useUpdatesStore.getState().hideReportedUpdate(reportUpdateId!);
+              // Invalidate updates cache to refresh (reported update will be filtered out by backend)
+              if (session?.user?.id) {
+                queryClient.invalidateQueries({ queryKey: ['updates', session.user.id] });
+              }
               
               Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report. The content has been hidden from your feed.');
             } catch (error: any) {

@@ -15,8 +15,8 @@
  */
 
 import { useMemo } from 'react';
-import { usePeopleStore } from '@/stores/people-store';
-import { useUpdatesStore } from '@/stores/updates-store';
+import { usePeople } from './use-people';
+import { useUpdates } from './use-updates';
 import type { Update, Person } from '@/types/family-tree';
 
 export type FeedFilter = 'all' | 'group';
@@ -51,24 +51,32 @@ export interface UseFamilyFeedResult {
  * @returns Object containing filtered updates array and total count
  */
 export function useFamilyFeed(filter: FeedFilter = 'all'): UseFamilyFeedResult {
-  const updatesMap = useUpdatesStore((state) => state.updates);
-  const updatesMapSize = useUpdatesStore((state) => state.updates.size);
-  const getPerson = usePeopleStore((state) => state.getPerson);
+  const { data: updates = [] } = useUpdates();
+  const { data: people = [] } = usePeople();
+  
+  // Create people map for efficient lookup
+  const peopleMap = useMemo(() => {
+    const map = new Map<string, Person>();
+    for (const person of people) {
+      map.set(person.id, person);
+    }
+    return map;
+  }, [people]);
 
   // Memoize all family updates with enrichment
   const allUpdates = useMemo(() => {
-    return Array.from(updatesMap.values())
+    return updates
       .filter(update => !update.deletedAt) // Exclude soft-deleted updates
       .map(update => ({
         update,
-        person: getPerson(update.personId),
+        person: peopleMap.get(update.personId),
         taggedPeople: (update.taggedPersonIds || [])
-          .map(id => getPerson(id))
+          .map(id => peopleMap.get(id))
           .filter(Boolean) as Person[],
       }))
       .filter(({ person }) => person !== undefined)
       .sort((a, b) => b.update.createdAt - a.update.createdAt);
-  }, [updatesMap, updatesMapSize, getPerson]);
+  }, [updates, peopleMap]);
 
   // Memoize filtered updates
   const filteredUpdates = useMemo(() => {

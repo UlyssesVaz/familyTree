@@ -1,36 +1,128 @@
 /**
- * Hook for managing blocked users
+ * React Query hooks for managing blocked users
  * 
- * Wrapper around BlockedUsersStore for easy consumption in components.
- * Automatically loads blocked users on mount and provides reactive updates.
+ * Replaces Zustand store with React Query for automatic:
+ * - Optimistic updates
+ * - Error rollback
+ * - Cache invalidation
+ * - Loading states
  */
 
-import { useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/auth-context';
-import { useBlockedUsersStore } from '@/stores/blocked-users-store';
+import { getBlockedUsersWithInfo, unblockUser as unblockUserApi } from '@/services/supabase/blocks-api';
 
 /**
- * Hook to get and manage blocked user IDs
- * 
- * Uses Zustand store for optimistic updates and reactive UI.
- * Automatically loads from backend on mount.
- * 
- * @returns Set of blocked auth user IDs (linkedAuthUserId values)
+ * Query hook - fetches blocked users with profile info
  */
-export function useBlockedUsers(): Set<string> {
+export function useBlockedUsers() {
   const { session } = useAuth();
-  const blockedUserIds = useBlockedUsersStore((state) => state.blockedUserIds);
-  const loadBlockedUsers = useBlockedUsersStore((state) => state.loadBlockedUsers);
-  const isLoading = useBlockedUsersStore((state) => state.isLoading);
+  const userId = session?.user?.id;
 
-  // Load blocked users from backend on mount (only once per session)
-  useEffect(() => {
-    if (!session?.user?.id || isLoading) {
-      return;
-    }
+  return useQuery({
+    queryKey: ['blockedUsers', userId],
+    queryFn: async () => {
+      if (!userId) return [];
+      return await getBlockedUsersWithInfo(userId);
+    },
+    enabled: !!userId,
+    staleTime: 60000, // 1 minute
+  });
+}
 
-    loadBlockedUsers(session.user.id);
-  }, [session?.user?.id]); // Only reload if user changes
+/**
+ * Hook for backward compatibility - returns Set<string> like old hook
+ * Used by components that expect Set<string> format
+ */
+export function useBlockedUserIds(): Set<string> {
+  const { session } = useAuth();
+  const userId = session?.user?.id;
+  
+  const { data } = useQuery({
+    queryKey: ['blockedUserIds', userId],
+    queryFn: async () => {
+      if (!userId) return new Set<string>();
+      
+      const { getBlockedUserIds } = await import('@/services/supabase/blocks-api');
+      return await getBlockedUserIds(userId);
+    },
+    enabled: !!userId,
+    staleTime: 60000,
+  });
+  
+  return data ?? new Set<string>();
+}
 
-  return blockedUserIds;
+/**
+ * Mutation hook - unblocks a user with optimistic updates
+ */
+export function useUnblockUser() {
+  const queryClient = useQueryClient();
+  const { session } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({ blockedUserId }: { blockedUserId: string }) => {
+      const currentUserId = session?.user?.id;
+      if (!currentUserId) {
+        throw new Error('User must be signed in');
+      }
+      await unblockUserApi(currentUserId, blockedUserId);
+    },
+    
+    // Optimistic update - happens BEFORE API call
+    onMutate: async ({ blockedUserId }) => {
+      const currentUserId = session?.user?.id;
+      if (!currentUserId) return;
+
+      // Cancel outgoing queries
+      await queryClient.cancelQueries({ queryKey: ['blockedUsers', currentUserId] });
+      await queryClient.cancelQueries({ queryKey: ['blockedUserIds', currentUserId] });
+
+      // Snapshot previous values for rollback
+      const previousBlockedUsers = queryClient.getQueryData(['blockedUsers', currentUserId]);
+      const previousBlockedUserIds = queryClient.getQueryData(['blockedUserIds', currentUserId]);
+
+      // Optimistically update blockedUsers list
+      queryClient.setQueryData(['blockedUsers', currentUserId], (old: any) => {
+        if (!old) return old;
+        return old.filter((user: any) => user.userId !== blockedUserId);
+      });
+
+      // Optimistically update blockedUserIds Set
+      queryClient.setQueryData(['blockedUserIds', currentUserId], (old: Set<string>) => {
+        if (!old) return old;
+        const newSet = new Set(old);
+        newSet.delete(blockedUserId);
+        return newSet;
+      });
+
+      return { previousBlockedUsers, previousBlockedUserIds };
+    },
+    
+    // Auto-rollback on error
+    onError: (error, { blockedUserId }, context) => {
+      const currentUserId = session?.user?.id;
+      if (!currentUserId || !context) return;
+
+      // Restore previous values
+      if (context.previousBlockedUsers) {
+        queryClient.setQueryData(['blockedUsers', currentUserId], context.previousBlockedUsers);
+      }
+      if (context.previousBlockedUserIds) {
+        queryClient.setQueryData(['blockedUserIds', currentUserId], context.previousBlockedUserIds);
+      }
+    },
+    
+    // Invalidate to refetch fresh data on success
+    onSuccess: (data, { blockedUserId }) => {
+      const currentUserId = session?.user?.id;
+      if (!currentUserId) return;
+
+      // Invalidate related queries to trigger refetch
+      queryClient.invalidateQueries({ queryKey: ['blockedUsers', currentUserId] });
+      queryClient.invalidateQueries({ queryKey: ['blockedUserIds', currentUserId] });
+      // Invalidate family tree to refresh tree view
+      queryClient.invalidateQueries({ queryKey: ['familyTree', currentUserId] });
+    },
+  });
 }

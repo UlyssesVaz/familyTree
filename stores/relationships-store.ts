@@ -302,31 +302,87 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
 
     const oldPeople = new Map(people);
     const newPeople = new Map(people);
-    let hasChanges = false;
 
-    // Create direct bidirectional sibling relationship (use real IDs)
-    const updatedPerson1: Person = {
-      ...person1,
-      siblingIds: [...person1.siblingIds, realPersonId2],
-      updatedAt: Date.now(),
-      version: person1.version + 1,
-    };
+    // STEP 1: Collect ALL people who should be siblings (the "sibling group")
+    // Siblings are transitive: if A is sibling to B, and B is sibling to C, then A and C are siblings
+    const siblingGroup = new Set<string>();
+    siblingGroup.add(realPersonId1);
+    siblingGroup.add(realPersonId2);
+    
+    // Add all of person1's existing siblings
+    person1.siblingIds.forEach(id => siblingGroup.add(id));
+    
+    // Add all of person2's existing siblings
+    person2.siblingIds.forEach(id => siblingGroup.add(id));
+    
+    // Add siblings through shared parents (if they exist)
+    // For each parent, all children are siblings
+    for (const parentId of person1.parentIds) {
+      const parent = people.get(parentId);
+      if (parent) {
+        parent.childIds.forEach(childId => {
+          if (childId !== realPersonId1) {
+            siblingGroup.add(childId);
+          }
+        });
+      }
+    }
+    
+    for (const parentId of person2.parentIds) {
+      const parent = people.get(parentId);
+      if (parent) {
+        parent.childIds.forEach(childId => {
+          if (childId !== realPersonId2) {
+            siblingGroup.add(childId);
+          }
+        });
+      }
+    }
 
-    const updatedPerson2: Person = {
-      ...person2,
-      siblingIds: [...person2.siblingIds, realPersonId1],
-      updatedAt: Date.now(),
-      version: person2.version + 1,
-    };
+    // STEP 2: Update EVERY person in the sibling group to have all others as siblings
+    const siblingGroupArray = Array.from(siblingGroup);
+    
+    if (__DEV__) {
+      const siblingNames = siblingGroupArray.map(id => {
+        const p = people.get(id);
+        return p ? p.name : id;
+      }).join(', ');
+      console.log(`[RelationshipsStore] Added sibling relationship with transitivity:`);
+      console.log(`  Sibling group: ${siblingNames}`);
+      console.log(`  Total siblings in group: ${siblingGroupArray.length}`);
+    }
 
-    newPeople.set(realPersonId1, updatedPerson1);
-    newPeople.set(realPersonId2, updatedPerson2);
-    hasChanges = true;
+    for (const personId of siblingGroupArray) {
+      const person = newPeople.get(personId) || people.get(personId);
+      if (!person) continue;
 
-    // Also link through shared parents if they exist (for consistency)
+      // Get all siblings (everyone in the group except this person)
+      const allSiblings = siblingGroupArray.filter(id => id !== personId);
+      
+      // Only update if the sibling list actually changed
+      const currentSiblingIds = new Set(person.siblingIds);
+      const newSiblingIds = new Set(allSiblings);
+      
+      // Check if we need to update (sibling list is different)
+      const needsUpdate = 
+        currentSiblingIds.size !== newSiblingIds.size ||
+        !allSiblings.every(id => currentSiblingIds.has(id));
+
+      if (needsUpdate) {
+        const updatedPerson: Person = {
+          ...person,
+          siblingIds: allSiblings,
+          updatedAt: Date.now(),
+          version: person.version + 1,
+        };
+        newPeople.set(personId, updatedPerson);
+      }
+    }
+
+    // STEP 3: Also link through shared parents if they exist (for consistency)
     // Note: parentIds are already real IDs, so no need to resolve
     for (const parentId of person1.parentIds) {
-      const parent = newPeople.get(parentId);
+      const parent = newPeople.get(parentId) || people.get(parentId);
       if (parent && !parent.childIds.includes(realPersonId2)) {
         const updatedParent: Person = {
           ...parent,
@@ -336,12 +392,13 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
         };
         newPeople.set(parentId, updatedParent);
 
-        if (!updatedPerson2.parentIds.includes(parentId)) {
+        const currentPerson2 = newPeople.get(realPersonId2) || people.get(realPersonId2)!;
+        if (!currentPerson2.parentIds.includes(parentId)) {
           const updatedPerson2WithParent: Person = {
-            ...updatedPerson2,
-            parentIds: [...updatedPerson2.parentIds, parentId],
+            ...currentPerson2,
+            parentIds: [...currentPerson2.parentIds, parentId],
             updatedAt: Date.now(),
-            version: updatedPerson2.version + 1,
+            version: currentPerson2.version + 1,
           };
           newPeople.set(realPersonId2, updatedPerson2WithParent);
         }
@@ -349,7 +406,7 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
     }
 
     for (const parentId of person2.parentIds) {
-      const parent = newPeople.get(parentId);
+      const parent = newPeople.get(parentId) || people.get(parentId);
       if (parent && !parent.childIds.includes(realPersonId1)) {
         const updatedParent: Person = {
           ...parent,
@@ -359,7 +416,7 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
         };
         newPeople.set(parentId, updatedParent);
 
-        const currentPerson1 = newPeople.get(realPersonId1)!;
+        const currentPerson1 = newPeople.get(realPersonId1) || people.get(realPersonId1)!;
         if (!currentPerson1.parentIds.includes(parentId)) {
           const updatedPerson1WithParent: Person = {
             ...currentPerson1,
@@ -372,8 +429,8 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
       }
     }
 
-    if (hasChanges) {
-      // STEP 1: Optimistic update
+    // STEP 4: Optimistic update
+    if (newPeople.size > 0) {
       usePeopleStore.setState({ people: new Map(newPeople) });
       
       if (__DEV__) {
@@ -383,13 +440,14 @@ export const useRelationshipsStore = create<RelationshipsStore>(() => ({
         }
       }
 
-      // STEP 2: If no userId provided, skip database save
+      // STEP 5: If no userId provided, skip database save
       if (!userId) {
         console.warn('[RelationshipsStore] addSibling called without userId - saving to local state only');
         return;
       }
 
       try {
+        // Save only the direct relationship to database (minimal storage)
         await createRelationship(userId, {
           personOneId: realPersonId1,
           personTwoId: realPersonId2,

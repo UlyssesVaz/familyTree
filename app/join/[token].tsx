@@ -38,8 +38,8 @@ import {
   InvitationError,
   type InvitationDetails 
 } from '@/services/supabase/invitations-api';
-import { useSessionStore } from '@/stores/session-store';
-import { usePeopleStore } from '@/stores/people-store';
+import { useSyncFamilyTree, useEgo } from '@/hooks/use-session';
+import { usePeople } from '@/hooks/use-people';
 
 type ScreenState = 
   | 'loading'           // Initial load, validating token
@@ -59,6 +59,9 @@ export default function JoinScreen() {
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
   const { session, signInWithProvider } = useAuth();
+  const syncFamilyTreeMutation = useSyncFamilyTree();
+  const ego = useEgo();
+  const { data: peopleArray = [] } = usePeople();
 
   const [screenState, setScreenState] = useState<ScreenState>('loading');
   const [invitation, setInvitation] = useState<InvitationDetails | null>(null);
@@ -140,16 +143,15 @@ export default function JoinScreen() {
       // Refresh family tree to load the claimed profile
       // CRITICAL: Wait for sync to complete before navigating
       try {
-        await useSessionStore.getState().syncFamilyTree(session.user.id);
+        await syncFamilyTreeMutation.mutateAsync(session.user.id);
         
-        // Verify ego is loaded
-        const ego = useSessionStore.getState().getEgo();
+        // Verify ego is loaded (React Query will have updated after sync)
         if (!ego) {
           throw new Error('Failed to load profile after claim');
         }
         
         // Verify people are loaded
-        const peopleCount = usePeopleStore.getState().people.size;
+        const peopleCount = peopleArray.length;
         if (peopleCount === 0) {
           throw new Error('Failed to load family tree after claim');
         }

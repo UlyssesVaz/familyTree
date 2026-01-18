@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { StyleSheet, View, Platform, Alert, ScrollView, Dimensions, Share, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -23,10 +23,10 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTreeLayout } from '@/hooks/use-tree-layout';
-import { usePeopleStore } from '@/stores/people-store';
-import { useRelationshipsStore } from '@/stores/relationships-store';
-import { useSessionStore } from '@/stores/session-store';
-import { useBlockedUsers } from '@/hooks/use-blocked-users';
+import { useEgoId } from '@/hooks/use-session';
+import { useAddPerson, usePeople } from '@/hooks/use-people';
+import { useAddParent, useAddSpouse, useAddChild, useAddSibling, getSiblings } from '@/hooks/use-relationships';
+import { useBlockedUserIds } from '@/hooks/use-blocked-users';
 import type { Gender, Person } from '@/types/family-tree';
 
 /**
@@ -43,6 +43,7 @@ function GenerationRow({
   onPersonAddPress,
   onPersonPress,
   blockedUserIds,
+  peopleArray,
 }: { 
   people: Person[];
   isEgo?: boolean;
@@ -52,16 +53,35 @@ function GenerationRow({
   onPersonAddPress?: (person: Person) => void;
   onPersonPress?: (person: Person) => void;
   blockedUserIds: Set<string>;
+  peopleArray: Person[];
 }) {
-  const getPerson = usePeopleStore((state) => state.getPerson);
-  const getSiblings = useRelationshipsStore((state) => state.getSiblings);
+  // #region agent log
+  if (!peopleArray) {
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:GenerationRow',message:'peopleArray is undefined',data:{peopleArrayType:typeof peopleArray,peopleArrayLength:peopleArray?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1,H4'})}).catch(()=>{});
+  }
+  // #endregion
+  
+  // Create local lookup maps for efficient access
+  const peopleMap = useMemo(() => {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:GenerationRow:useMemo',message:'useMemo executing',data:{peopleArrayLength:peopleArray?.length,peopleArrayDefined:!!peopleArray},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1,H3'})}).catch(()=>{});
+    // #endregion
+    const map = new Map<string, Person>();
+    for (const person of peopleArray || []) {
+      map.set(person.id, person);
+    }
+    return map;
+  }, [peopleArray]);
+
+  const getPerson = useCallback((id: string) => peopleMap.get(id), [peopleMap]);
+  const getSiblingsForPerson = useCallback((personId: string) => getSiblings(personId, peopleArray), [peopleArray]);
 
   if (isEgo && egoPerson) {
     // Special handling for ego row - ego is centered, then siblings on right
     const egoSpouses = egoPerson.spouseIds
       .map((id) => getPerson(id))
       .filter((p): p is NonNullable<typeof p> => p !== undefined);
-    const egoSiblings = getSiblings(egoPerson.id);
+    const egoSiblings = getSiblingsForPerson(egoPerson.id);
 
     return (
       <View style={styles.personRow}>
@@ -190,7 +210,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id;
-  const egoId = useSessionStore((state) => state.egoId);
+  const egoId = useEgoId();
   const { client: statsigClient } = useStatsigClient();
   
   // Use the custom hook to get all tree layout calculations
@@ -198,14 +218,17 @@ export default function HomeScreen() {
   const { ancestorGenerations, descendantGenerations, spouses, siblings, ego } = useTreeLayout(egoId);
   
   // Get blocked user IDs for styling (show greyed out instead of hiding)
-  const blockedUserIds = useBlockedUsers();
-  // #region agent log
-  useEffect(() => {
-    const people = usePeopleStore.getState().people;
-    const placeholderPeople = Array.from(people.values()).filter(p => p.isPlaceholder);
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.tsx:199',message:'index.tsx store check',data:{totalPeople:people.size,placeholderCount:placeholderPeople.length,blockedSetSize:blockedUserIds.size,blockedIds:Array.from(blockedUserIds)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,B'})}).catch(()=>{});
-  }, [blockedUserIds, ancestorGenerations]);
-  // #endregion
+  const blockedUserIds = useBlockedUserIds();
+  
+  // Get people array for GenerationRow component
+  const { data: peopleArray = [] } = usePeople();
+  
+  // React Query mutations
+  const addPersonMutation = useAddPerson();
+  const addParentMutation = useAddParent();
+  const addSpouseMutation = useAddSpouse();
+  const addChildMutation = useAddChild();
+  const addSiblingMutation = useAddSibling();
   
   const colorSchemeHook = useColorScheme();
   const theme = colorSchemeHook ?? 'light';
@@ -291,32 +314,43 @@ export default function HomeScreen() {
       return;
     }
 
-    const addPerson = usePeopleStore.getState().addPerson;
-    const addParent = useRelationshipsStore.getState().addParent;
-    const addSpouse = useRelationshipsStore.getState().addSpouse;
-    const addChild = useRelationshipsStore.getState().addChild;
-    const addSibling = useRelationshipsStore.getState().addSibling;
-
     try {
-      // Create the new person (await async call and pass userId)
-      const newPersonId = await addPerson(data, userId);
+      // Create the new person using React Query mutation
+      const createdPerson = await addPersonMutation.mutateAsync({
+        userId,
+        input: data,
+      });
+
+      const newPersonId = createdPerson.id;
 
       // Track event: relative_added
       logStatsigEvent(statsigClient, 'relative_added');
 
-      // Create the relationship based on type (await async calls and pass userId)
+      // Create the relationship based on type using React Query mutations
       switch (selectedRelativeType) {
         case 'parent':
-          await addParent(selectedPerson.id, newPersonId, userId);
+          await addParentMutation.mutateAsync({
+            childId: selectedPerson.id,
+            parentId: newPersonId,
+          });
           break;
         case 'spouse':
-          await addSpouse(selectedPerson.id, newPersonId, userId);
+          await addSpouseMutation.mutateAsync({
+            personId1: selectedPerson.id,
+            personId2: newPersonId,
+          });
           break;
         case 'child':
-          await addChild(selectedPerson.id, newPersonId, userId);
+          await addChildMutation.mutateAsync({
+            parentId: selectedPerson.id,
+            childId: newPersonId,
+          });
           break;
         case 'sibling':
-          await addSibling(selectedPerson.id, newPersonId, userId);
+          await addSiblingMutation.mutateAsync({
+            personId1: selectedPerson.id,
+            personId2: newPersonId,
+          });
           break;
       }
 
@@ -451,6 +485,7 @@ export default function HomeScreen() {
                 <GenerationRow 
                   people={generation}
                   blockedUserIds={blockedUserIds}
+                  peopleArray={peopleArray}
                   onPersonAddPress={handleAddPress}
                   onPersonPress={handlePersonPress}
                 />
@@ -462,6 +497,7 @@ export default function HomeScreen() {
               people={[]}
               isEgo={true}
               egoPerson={ego}
+              peopleArray={peopleArray}
               blockedUserIds={blockedUserIds}
               onEgoPress={handleEgoCardPress}
               onEgoAddPress={() => handleAddPress(ego)}
@@ -475,6 +511,7 @@ export default function HomeScreen() {
                 <GenerationRow 
                   people={generation}
                   blockedUserIds={blockedUserIds}
+                  peopleArray={peopleArray}
                   onPersonAddPress={handleAddPress}
                   onPersonPress={handlePersonPress}
                 />

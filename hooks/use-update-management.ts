@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Alert, Platform } from 'react-native';
-import { useUpdatesStore } from '@/stores/updates-store';
+import { useDeleteUpdate } from './use-updates';
 import type { Update } from '@/types/family-tree';
 
 /**
@@ -22,13 +22,8 @@ export function useUpdateManagement() {
   const [menuUpdateId, setMenuUpdateId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   
-  const deleteUpdate = useUpdatesStore((state) => state.deleteUpdate);
-  const deleteUpdateRef = useRef(deleteUpdate);
-  
-  // Keep ref in sync with store action (handles store updates)
-  useEffect(() => {
-    deleteUpdateRef.current = deleteUpdate;
-  }, [deleteUpdate]);
+  // Use React Query mutation for delete
+  const deleteUpdateMutation = useDeleteUpdate();
 
   // Handle delete confirmation after menu modal closes
   // Uses requestAnimationFrame + setTimeout to avoid timing issues with modal animations
@@ -49,7 +44,7 @@ export function useUpdateManagement() {
           if (platformExists && platformOS === 'web') {
             const confirmed = (window as any).confirm?.('Are you sure you want to delete this update?');
             if (confirmed) {
-              deleteUpdateRef.current(updateIdToDelete);
+              deleteUpdateMutation.mutate({ updateId: updateIdToDelete });
             }
           } else {
             Alert.alert(
@@ -61,7 +56,7 @@ export function useUpdateManagement() {
                   text: 'Delete',
                   style: 'destructive',
                   onPress: () => {
-                    deleteUpdateRef.current(updateIdToDelete);
+                    deleteUpdateMutation.mutate({ updateId: updateIdToDelete });
                   },
                 },
               ],

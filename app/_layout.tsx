@@ -27,6 +27,16 @@ import { ModalProvider } from '@/contexts/modal-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { StatsigProvider } from '@/components/StatsigProvider';
 import { useStatsigClient } from '@statsig/expo-bindings';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60000, // 1 minute - data is fresh for 1 minute
+      gcTime: 300000, // 5 minutes - cache unused queries for 5 minutes (formerly cacheTime)
+    },
+  },
+});
 
 // Supabase will be initialized when auth service is first used
 // No initialization needed here - Supabase client initializes lazily
@@ -90,17 +100,19 @@ export default function RootLayout() {
                 {/* AnalyticsProvider syncs Statsig identity with auth state */}
                 {/* ProfileProvider handles profile loading and routing decisions */}
                 {/* This ensures Statsig is ready to catch telemetry from AuthProvider itself */}
-                <StatsigProvider>
-                  <AnalyticsProvider>
-                    <AuthProvider>
-                      <ProfileProvider>
-                        <AuthGuard>
-                          <RootLayoutNav />
-                        </AuthGuard>
-                      </ProfileProvider>
-                    </AuthProvider>
-                  </AnalyticsProvider>
-                </StatsigProvider>
+                <QueryClientProvider client={queryClient}>
+                  <StatsigProvider>
+                    <AnalyticsProvider>
+                      <AuthProvider>
+                        <ProfileProvider>
+                          <AuthGuard>
+                            <RootLayoutNav />
+                          </AuthGuard>
+                        </ProfileProvider>
+                      </AuthProvider>
+                    </AnalyticsProvider>
+                  </StatsigProvider>
+                </QueryClientProvider>
               </ModalProvider>
             </ErrorProvider>
           </ColorSchemeProvider>

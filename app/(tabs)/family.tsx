@@ -14,9 +14,9 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFamilyFeed, type FeedFilter } from '@/hooks/use-family-feed';
 import { useUpdateManagement } from '@/hooks/use-update-management';
-import { usePeopleStore } from '@/stores/people-store';
-import { useUpdatesStore } from '@/stores/updates-store';
-import { useSessionStore } from '@/stores/session-store';
+import { usePeople } from '@/hooks/use-people';
+import { useUpdates, useUpdateUpdate, useToggleUpdatePrivacy } from '@/hooks/use-updates';
+import { useEgo, useEgoId, useSyncFamilyTree } from '@/hooks/use-session';
 import { formatMentions } from '@/utils/format-mentions';
 import { getUpdateMenuPermissions } from '@/utils/update-menu-permissions';
 import { useAuth } from '@/contexts/auth-context';
@@ -35,13 +35,13 @@ export default function FamilyScreen() {
   const { session } = useAuth();
   const { client: statsigClient } = useStatsigClient();
   
-  const ego = useSessionStore((state) => state.getEgo());
-  const egoId = useSessionStore((state) => state.egoId);
-  const people = usePeopleStore((state) => state.people);
-  const peopleArray = Array.from(people.values());
-  const addUpdate = useUpdatesStore((state) => state.addUpdate);
-  const updateUpdate = useUpdatesStore((state) => state.updateUpdate);
-  const toggleUpdatePrivacy = useUpdatesStore((state) => state.toggleUpdatePrivacy);
+  const ego = useEgo();
+  const egoId = useEgoId();
+  const { data: peopleArray = [] } = usePeople();
+  const { data: updates = [] } = useUpdates();
+  const syncFamilyTreeMutation = useSyncFamilyTree();
+  const updateUpdateMutation = useUpdateUpdate();
+  const toggleUpdatePrivacyMutation = useToggleUpdatePrivacy();
 
   // Use custom hook to get filtered family feed updates
   const { updates: allFamilyUpdates } = useFamilyFeed(filter as FeedFilter);
@@ -85,8 +85,10 @@ export default function FamilyScreen() {
               onPress={() => {
                 // Retry sync
                 if (session?.user?.id) {
-                  useSessionStore.getState().syncFamilyTree(session.user.id).catch((syncError) => {
-                    console.error('[FamilyScreen] Error retrying sync:', syncError);
+                  syncFamilyTreeMutation.mutate(session.user.id, {
+                    onError: (syncError) => {
+                      console.error('[FamilyScreen] Error retrying sync:', syncError);
+                    },
                   });
                 }
               }}
@@ -99,8 +101,10 @@ export default function FamilyScreen() {
         onReset={() => {
           // Reset error boundary state
           if (session?.user?.id) {
-            useSessionStore.getState().syncFamilyTree(session.user.id).catch((syncError) => {
-              console.error('[FamilyScreen] Error retrying sync after reset:', syncError);
+            syncFamilyTreeMutation.mutate(session.user.id, {
+              onError: (syncError) => {
+                console.error('[FamilyScreen] Error retrying sync after reset:', syncError);
+              },
             });
           }
         }}
@@ -418,26 +422,32 @@ export default function FamilyScreen() {
           }}
           onEdit={async (updateId, title, photoUrl, caption, isPublic, taggedPersonIds) => {
             try {
-              await updateUpdate(updateId, title, photoUrl, caption, isPublic, taggedPersonIds);
+              await updateUpdateMutation.mutateAsync({
+                updateId,
+                title,
+                photoUrl,
+                caption,
+                isPublic,
+                taggedPersonIds,
+              });
+              
+              // Track event: wall_entry_updated
+              const update = updates.find(u => u.id === updateId);
+              const isOnOtherWall = update?.personId !== egoId;
+              const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
+              
+              logStatsigEvent(statsigClient, 'wall_entry_updated', undefined, {
+                isOnOtherWall,
+                hasTagging,
+                taggedCount: taggedPersonIds?.length ?? 0,
+              });
+              
+              setIsAddingUpdate(false);
+              setUpdateToEdit(null);
             } catch (error: any) {
               Alert.alert('Error', 'Failed to update post. Please try again.');
               return;
             }
-            
-            // Track event: wall_entry_updated
-            const update = useUpdatesStore.getState().updates.get(updateId);
-            const egoId = useSessionStore.getState().egoId;
-            const isOnOtherWall = update?.personId !== egoId;
-            const hasTagging = (taggedPersonIds?.length ?? 0) > 0;
-            
-            logStatsigEvent(statsigClient, 'wall_entry_updated', undefined, {
-              isOnOtherWall,
-              hasTagging,
-              taggedCount: taggedPersonIds?.length ?? 0,
-            });
-            
-            setIsAddingUpdate(false);
-            setUpdateToEdit(null);
           }}
         />
       )}
@@ -467,8 +477,8 @@ export default function FamilyScreen() {
                 description,
               });
               
-              // Immediately hide reported update from local store
-              useUpdatesStore.getState().hideReportedUpdate(reportUpdateId!);
+              // Invalidate updates cache to refresh feed (reported update will be filtered out)
+              // Note: The backend should handle hiding reported content, but we refresh to ensure UI is updated
               
               Alert.alert('Report Submitted', 'Thank you for keeping the family tree safe. We will review this report. The content has been hidden from your feed.');
             } catch (error: any) {

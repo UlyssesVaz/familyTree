@@ -5,7 +5,6 @@
  * Similar to Instagram's blocked users management.
  */
 
-import { useState, useEffect } from 'react';
 import { ScrollView, StyleSheet, View, Pressable, Alert, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -17,14 +16,13 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
-import { getBlockedUsersWithInfo, unblockUser } from '@/services/supabase/blocks-api';
 import { getUserProfile } from '@/services/supabase/people-api';
-import { usePeopleStore } from '@/stores/people-store';
 import type { Person } from '@/types/family-tree';
-import { useBlockedUsersStore } from '@/stores/blocked-users-store';
-import { useSessionStore } from '@/stores/session-store';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
+import { useBlockedUsers, useUnblockUser } from '@/hooks/use-blocked-users';
+import { usePeople, useUpdatePerson } from '@/hooks/use-people';
+import { useSyncFamilyTree } from '@/hooks/use-session';
 
 interface BlockedUser {
   userId: string; // auth.users.id
@@ -42,51 +40,12 @@ export default function BlockedUsersScreen() {
   const { session } = useAuth();
   const { client: statsigClient } = useStatsigClient();
   
-  const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [unblockingUserId, setUnblockingUserId] = useState<string | null>(null);
-
-  // Load blocked users on mount - use store which auto-loads on mount via useBlockedUsers hook
-  useEffect(() => {
-    if (!session?.user?.id) {
-      setIsLoading(false);
-      return;
-    }
-
-    // Load from backend if not already loaded (for optimistic updates)
-    const storeBlockedIds = useBlockedUsersStore.getState().blockedUserIds;
-    if (storeBlockedIds.size === 0 && !useBlockedUsersStore.getState().isLoading) {
-      useBlockedUsersStore.getState().loadBlockedUsers(session.user.id);
-    }
-
-    // Fetch blocked users with info directly from database
-    // CRITICAL: Don't use PeopleStore because blocked users are placeholders with empty names
-    const loadBlockedUsersList = async () => {
-      setIsLoading(true);
-      try {
-        const blockedUsersList = await getBlockedUsersWithInfo(session.user.id);
-        setBlockedUsers(blockedUsersList);
-      } catch (error) {
-        console.error('[BlockedUsers] Error loading blocked users:', error);
-        setBlockedUsers([]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    // Initial load
-    loadBlockedUsersList();
-
-    // Subscribe to store changes for reactive updates (when user blocks/unblocks)
-    const unsubscribe = useBlockedUsersStore.subscribe((state) => {
-      // Reload from database when store changes (optimistic update happened)
-      if (!state.isLoading) {
-        loadBlockedUsersList();
-      }
-    });
-
-    return () => unsubscribe();
-  }, [session?.user?.id]);
+  // React Query handles loading, data, and automatic refetching
+  const { data: blockedUsers = [], isLoading } = useBlockedUsers();
+  const unblockMutation = useUnblockUser();
+  const updatePersonMutation = useUpdatePerson();
+  const syncFamilyTreeMutation = useSyncFamilyTree();
+  const { data: peopleArray = [] } = usePeople();
 
   const handleUnblock = (blockedUser: BlockedUser) => {
     if (!session?.user?.id) {
@@ -103,144 +62,121 @@ export default function BlockedUsersScreen() {
           text: 'Unblock',
           onPress: async () => {
             const userId = blockedUser.userId;
-            setUnblockingUserId(userId);
             
-            // STEP 1: OPTIMISTIC UPDATE - Remove from blocked list immediately
-            useBlockedUsersStore.getState().removeBlockedUser(userId);
-            // List will update automatically via store subscription
-            
-            // STEP 2: OPTIMISTIC UPDATE - Restore person's data in PeopleStore
-            // CRITICAL: Do the INVERSE of blocking - restore everything immediately
-            const people = usePeopleStore.getState().people;
-            let existingPerson: Person | null = null;
-            
-            // Find the existing placeholder person to preserve relationships
-            for (const [personId, person] of people.entries()) {
-              if (person.linkedAuthUserId === userId) {
-                existingPerson = person;
-                break;
-              }
-            }
-            
-            // Fetch fresh person data from database FIRST (before optimistic update)
-            // This ensures we have the real name and data immediately
-            let personData: Person | null = null;
+            // React Query handles optimistic update, API call, and rollback automatically
             try {
-              personData = await getUserProfile(userId);
-            } catch (error) {
-              console.warn('[BlockedUsers] Could not fetch person data for optimistic update:', error);
-            }
-            
-            // If we found the existing placeholder, restore it IMMEDIATELY (optimistic)
-            // CRITICAL: Use the SAME person ID and merge fresh data if available
-            if (existingPerson) {
-              const restoredPerson: Person = {
-                // Use existing person's ID to ensure we update the same person in the Map
-                id: existingPerson.id,
-                // Use fresh data if available, otherwise keep existing data
-                name: personData?.name || existingPerson.name || '',
-                photoUrl: personData?.photoUrl || existingPerson.photoUrl,
-                bio: personData?.bio || existingPerson.bio,
-                birthDate: personData?.birthDate || existingPerson.birthDate,
-                deathDate: personData?.deathDate || existingPerson.deathDate,
-                gender: personData?.gender || existingPerson.gender,
-                phoneNumber: personData?.phoneNumber || existingPerson.phoneNumber,
-                // Preserve relationships from existing placeholder
-                parentIds: existingPerson.parentIds,
-                spouseIds: existingPerson.spouseIds,
-                childIds: existingPerson.childIds,
-                siblingIds: existingPerson.siblingIds,
-                // Preserve timestamps and version
-                createdAt: existingPerson.createdAt,
-                updatedAt: personData?.updatedAt || existingPerson.updatedAt || Date.now(),
-                version: personData?.version || existingPerson.version || 1,
-                // CRITICAL: Clear placeholder flags - this is the inverse of blocking
-                isPlaceholder: false,
-                placeholderReason: undefined,
-                // Preserve other fields
-                createdBy: personData?.createdBy || existingPerson.createdBy,
-                updatedBy: personData?.updatedBy || existingPerson.updatedBy,
-                hiddenTaggedUpdateIds: existingPerson.hiddenTaggedUpdateIds,
-                linkedAuthUserId: existingPerson.linkedAuthUserId,
-              };
+              // STEP 1: Find existing person and fetch fresh data
+              const peopleMap = new Map(peopleArray.map(p => [p.id, p]));
+              let existingPerson: Person | null = null;
               
-              // Update the person in the store - this should trigger re-render
-              usePeopleStore.getState().updatePerson(restoredPerson);
-            } else if (personData) {
-              // Person not in store yet - just add them
-              usePeopleStore.getState().updatePerson({
-                ...personData,
-                isPlaceholder: false,
-                placeholderReason: undefined,
-              });
-            }
-            
-            try {
-              // STEP 3: Sync with backend
-              await unblockUser(session.user.id, userId);
-              
-              // STEP 4: CRITICAL - Wait for full sync to complete to ensure tree refreshes
-              // This ensures their posts appear again in the feed and tree layout updates
-              const currentUserId = session.user.id;
-              try {
-                await useSessionStore.getState().syncFamilyTree(currentUserId);
-                
-                if (__DEV__) {
-                  console.log('[BlockedUsers] Sync completed after unblock');
-                }
-              } catch (syncError) {
-                console.warn('[BlockedUsers] Sync after unblock failed (non-fatal):', syncError);
-                // Continue - optimistic update is already done
-              }
-              
-              // Success - state already updated optimistically
-              logStatsigEvent(statsigClient, 'user_unblocked', {
-                unblocked_user_id: userId,
-              });
-              
-              Alert.alert(
-                'User Unblocked', 
-                `${blockedUser.name} has been unblocked. Their content will now appear in your feed.`,
-                [
-                  {
-                    text: 'OK',
-                    onPress: () => {
-                      // Try to go back safely, or navigate to home if no previous screen
-                      try {
-                        // Check if we can go back by trying (expo-router doesn't have canGoBack)
-                        // Use replace to home tabs which will refresh the tree view
-                        router.replace('/(tabs)');
-                      } catch (navError) {
-                        // Fallback: just navigate to home
-                        router.replace('/(tabs)');
-                      }
-                    },
-                  },
-                ]
-              );
-            } catch (error: any) {
-              // REVERT: If backend fails, add back to blocked list
-              useBlockedUsersStore.getState().addBlockedUser(userId);
-              
-              // Revert person back to placeholder (find existing person and mark as placeholder)
-              const people = usePeopleStore.getState().people;
-              for (const [personId, person] of people.entries()) {
+              // Find the existing placeholder person to preserve relationships
+              for (const person of peopleArray) {
                 if (person.linkedAuthUserId === userId) {
-                  const placeholderPerson: Person = {
-                    ...person,
-                    isPlaceholder: true,
-                    placeholderReason: 'blocked',
-                    name: '', // Clear name for privacy
-                  };
-                  usePeopleStore.getState().updatePerson(placeholderPerson);
+                  existingPerson = person;
                   break;
                 }
               }
               
-              console.error('[BlockedUsers] Error unblocking user:', error);
+              // Fetch fresh person data from database
+              let personData: Person | null = null;
+              try {
+                personData = await getUserProfile(userId);
+              } catch (error) {
+                console.warn('[BlockedUsers] Could not fetch person data:', error);
+              }
+              
+              // STEP 2: Restore person data using React Query mutation
+              if (existingPerson && session?.user?.id) {
+                const restoredPerson: Person = {
+                  id: existingPerson.id,
+                  name: personData?.name || existingPerson.name || '',
+                  photoUrl: personData?.photoUrl || existingPerson.photoUrl,
+                  bio: personData?.bio || existingPerson.bio,
+                  birthDate: personData?.birthDate || existingPerson.birthDate,
+                  deathDate: personData?.deathDate || existingPerson.deathDate,
+                  gender: personData?.gender || existingPerson.gender,
+                  phoneNumber: personData?.phoneNumber || existingPerson.phoneNumber,
+                  parentIds: existingPerson.parentIds,
+                  spouseIds: existingPerson.spouseIds,
+                  childIds: existingPerson.childIds,
+                  siblingIds: existingPerson.siblingIds,
+                  createdAt: existingPerson.createdAt,
+                  updatedAt: personData?.updatedAt || existingPerson.updatedAt || Date.now(),
+                  version: personData?.version || existingPerson.version || 1,
+                  isPlaceholder: false,
+                  placeholderReason: undefined,
+                  createdBy: personData?.createdBy || existingPerson.createdBy,
+                  updatedBy: personData?.updatedBy || existingPerson.updatedBy,
+                  hiddenTaggedUpdateIds: existingPerson.hiddenTaggedUpdateIds,
+                  linkedAuthUserId: existingPerson.linkedAuthUserId,
+                };
+                
+                // Update person via React Query
+                updatePersonMutation.mutate({
+                  userId: session.user.id,
+                  personId: existingPerson.id,
+                  updates: {
+                    name: restoredPerson.name,
+                    photoUrl: restoredPerson.photoUrl,
+                    bio: restoredPerson.bio,
+                    birthDate: restoredPerson.birthDate,
+                    deathDate: restoredPerson.deathDate,
+                    gender: restoredPerson.gender,
+                    phoneNumber: restoredPerson.phoneNumber,
+                    isPlaceholder: false,
+                    placeholderReason: undefined,
+                  },
+                });
+              } else if (personData && session?.user?.id) {
+                // Person not in cache yet - will be added when sync runs
+              }
+              
+              // STEP 3: Trigger React Query unblock mutation (handles API call, optimistic update, rollback)
+              unblockMutation.mutate(
+                { blockedUserId: userId },
+                {
+                  onSuccess: async () => {
+                    // Sync family tree after successful unblock using React Query
+                    if (session?.user?.id) {
+                      try {
+                        await syncFamilyTreeMutation.mutateAsync(session.user.id);
+                        if (__DEV__) {
+                          console.log('[BlockedUsers] Sync completed after unblock');
+                        }
+                      } catch (syncError) {
+                        console.warn('[BlockedUsers] Sync after unblock failed (non-fatal):', syncError);
+                      }
+                    }
+                    
+                    // Log event
+                    logStatsigEvent(statsigClient, 'user_unblocked', {
+                      unblocked_user_id: userId,
+                    });
+                    
+                    // Show success alert
+                    Alert.alert(
+                      'User Unblocked',
+                      `${blockedUser.name} has been unblocked. Their content will now appear in your feed.`,
+                      [
+                        {
+                          text: 'OK',
+                          onPress: () => {
+                            router.back();
+                          },
+                        },
+                      ]
+                    );
+                  },
+                  onError: (error: any) => {
+                    // React Query automatically rolled back the optimistic update
+                    // Person update will also be rolled back automatically
+                    Alert.alert('Error', error.message || 'Failed to unblock user. Please try again.');
+                  },
+                }
+              );
+            } catch (error: any) {
+              console.error('[BlockedUsers] Error in handleUnblock:', error);
               Alert.alert('Error', error.message || 'Failed to unblock user. Please try again.');
-            } finally {
-              setUnblockingUserId(null);
             }
           },
         },
@@ -313,16 +249,16 @@ export default function BlockedUsersScreen() {
               {/* Unblock Button */}
               <Pressable
                 onPress={() => handleUnblock(blockedUser)}
-                disabled={unblockingUserId === blockedUser.userId}
+                disabled={unblockMutation.isPending}
                 style={({ pressed }) => [
                   styles.unblockButton,
                   {
                     backgroundColor: colors.tint,
-                    opacity: (pressed || unblockingUserId === blockedUser.userId) ? 0.6 : 1,
+                    opacity: (pressed || unblockMutation.isPending) ? 0.6 : 1,
                   },
                 ]}
               >
-                {unblockingUserId === blockedUser.userId ? (
+                {unblockMutation.isPending ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
                   <ThemedText style={styles.unblockButtonText}>Unblock</ThemedText>
