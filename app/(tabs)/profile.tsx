@@ -86,10 +86,6 @@ export default function ProfileScreen() {
   
   const getPerson = useCallback((id: string) => peopleMap.get(id), [peopleMap]);
   
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'profile.tsx:after-hooks',message:'React Query hooks initialized',data:{peopleArrayLength:peopleArray?.length,getPersonDefined:typeof getPerson === 'function',peopleMapSize:peopleMap.size},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2,H3'})}).catch(()=>{});
-  // #endregion
-  
   // Profile tab always shows ego's profile (no personId param)
   const person = ego;
   const isEgo = true; // Always true for profile tab

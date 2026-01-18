@@ -19,6 +19,9 @@ import { getUserProfile } from '@/services/supabase/people-api';
 import type { Person } from '@/types/family-tree';
 import { isCOPPABlocked } from '@/utils/coppa-utils';
 import { getAccountDeletionStatus } from '@/services/supabase/account-api';
+import { logger } from '@/utils/logger';
+
+const profileLogger = logger.withPrefix('ProfileContext');
 
 interface ProfileContextType {
   profile: Person | null;
@@ -49,9 +52,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       // Session just became truthy (sign-in happened) - reset refs so profile check runs
       initialRoutingDoneRef.current = false;
       syncFamilyTreeDoneRef.current = null; // Reset so sync runs on sign-in (same or different user)
-      if (__DEV__) {
-        console.log('[ProfileContext] Session started, resetting refs for profile check');
-      }
+      profileLogger.log('Session started, resetting refs for profile check');
     }
     
     // CRITICAL: Reset sync ref if userId changed (different user logged in)
@@ -65,10 +66,8 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
         initialRoutingDoneRef.current = false;
         coppaCheckDoneRef.current = null; // Reset COPPA check for new user
         deletionCheckDoneRef.current = null; // Reset deletion check for new user
-        if (__DEV__) {
-          // SECURITY: Don't log actual user IDs - just indicate a change occurred
-          console.log('[ProfileContext] Different user logged in, resetting all refs');
-        }
+        // SECURITY: Don't log actual user IDs - just indicate a change occurred
+        profileLogger.log('Different user logged in, resetting all refs');
       }
     }
     
@@ -82,17 +81,15 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       initialRoutingDoneRef.current = false;
       coppaCheckDoneRef.current = null; // Reset COPPA check on sign out
       deletionCheckDoneRef.current = null; // Reset deletion check on sign out
-      if (__DEV__) {
-        console.log('[ProfileContext] Session ended, cleared profile and reset refs');
-      }
+      profileLogger.log('Session ended, cleared profile and reset refs');
     }
   }, [session]);
 
   // Steps 2-4: Check user profile after authentication (handles race conditions)
   // CRITICAL: Use session?.user?.id instead of entire session object to prevent unnecessary re-runs
   // Only depend on user ID and loading state, not the entire session object
-  const isSyncing = useSessionStore((state) => state.isSyncing);
-  const deletionStatus = useSessionStore((state) => state.deletionStatus);
+  // FIXED: Don't read Zustand state outside useEffect - causes stale closures
+  // Read fresh values inside useEffect instead
   
   // STEP 0: Check deletion status IMMEDIATELY after auth (before waiting for sync)
   // This must happen before sync because deleted users are filtered out during sync
@@ -103,12 +100,12 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
     }
 
     const currentUserId = session.user.id;
+    // Read fresh Zustand state inside useEffect to avoid stale closures
+    const deletionStatus = useSessionStore.getState().deletionStatus;
     
     // Only check deletion status once per user
     if (deletionCheckDoneRef.current === currentUserId) {
-      if (__DEV__) {
-        console.log('[ProfileContext] Deletion check already done for user, skipping');
-      }
+      profileLogger.log('Deletion check already done for user, skipping');
       return;
     }
     
@@ -119,13 +116,11 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
       try {
         const deletionCheck = await getAccountDeletionStatus(currentUserId);
         
-        if (__DEV__) {
-          console.log('[ProfileContext] Deletion status result:', {
-            hasDeletion: !!deletionCheck,
-            isInGracePeriod: deletionCheck?.isInGracePeriod,
-            gracePeriodEnds: deletionCheck?.gracePeriodEndsAt,
-          });
-        }
+        profileLogger.log('Deletion status result:', {
+          hasDeletion: !!deletionCheck,
+          isInGracePeriod: deletionCheck?.isInGracePeriod,
+          gracePeriodEnds: deletionCheck?.gracePeriodEndsAt,
+        });
         
         if (deletionCheck && deletionCheck.isInGracePeriod) {
           // User has active deletion request - redirect to recovery screen IMMEDIATELY
@@ -139,9 +134,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
             useSessionStore.getState().clearEgo();
             setProfile(null);
             
-            if (__DEV__) {
-              console.log('[ProfileContext] User has pending deletion, redirecting to recovery screen');
-            }
+            profileLogger.log('User has pending deletion, redirecting to recovery screen');
             
             // Use router from closure - ensure it's the latest reference
             // Store status first, then navigate
@@ -149,25 +142,23 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
               try {
                 router.replace('/(auth)/account-recovery');
               } catch (err) {
-                console.error('[ProfileContext] Error during redirect:', err);
+                profileLogger.error('Error during redirect:', err);
               }
             }, 150); // Delay to ensure store state is set and router is ready
           } else {
-            if (__DEV__) {
-              console.log('[ProfileContext] Deletion detected but initialRoutingDoneRef is already true');
-            }
+            profileLogger.log('Deletion detected but initialRoutingDoneRef is already true');
           }
         } else {
           // No deletion pending - clear deletion status from store if it was set
-          if (deletionStatus) {
+          // Read fresh state to avoid stale closure
+          const currentDeletionStatus = useSessionStore.getState().deletionStatus;
+          if (currentDeletionStatus) {
             useSessionStore.getState().setDeletionStatus(null);
           }
-          if (__DEV__) {
-            console.log('[ProfileContext] No pending deletion, continuing with normal flow');
-          }
+          profileLogger.log('No pending deletion, continuing with normal flow');
         }
       } catch (error) {
-        console.error('[ProfileContext] Error checking deletion status:', error);
+        profileLogger.error('Error checking deletion status:', error);
         // Continue with normal flow if deletion check fails
       }
     };
@@ -177,6 +168,10 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
   }, [session?.user?.id, isAuthLoading]);
   
   useEffect(() => {
+    // Read fresh Zustand state inside useEffect to avoid stale closures
+    const isSyncing = useSessionStore.getState().isSyncing;
+    const deletionStatus = useSessionStore.getState().deletionStatus;
+    
     // Wait for auth to complete AND sync to complete before checking profile
     if (isAuthLoading || !session || isSyncing) {
       return;
@@ -194,9 +189,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
     if (deletionStatus === null && initialRoutingDoneRef.current) {
       // Deletion was canceled - reset routing ref to allow normal flow
       initialRoutingDoneRef.current = false;
-      if (__DEV__) {
-        console.log('[ProfileContext] Deletion status cleared, resetting routing ref');
-      }
+      profileLogger.log('Deletion status cleared, resetting routing ref');
     }
 
     // CRITICAL: Track if we've already executed for this user ID to prevent duplicate execution
@@ -204,17 +197,13 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
     // But allow re-execution if deletion status was cleared
     if (syncFamilyTreeDoneRef.current === currentUserId && profileCheckRef.current && deletionStatus !== null) {
       // Already executed for this user - skip (unless deletion was just cleared)
-      if (__DEV__) {
-        console.log('[ProfileContext] Profile check already executed for this user, skipping');
-      }
+      profileLogger.log('Profile check already executed for this user, skipping');
       return;
     }
 
     // Don't proceed with profile check if user has pending deletion
     if (deletionStatus && deletionStatus.isInGracePeriod) {
-      if (__DEV__) {
-        console.log('[ProfileContext] Skipping profile check - user has pending deletion');
-      }
+      profileLogger.log('Skipping profile check - user has pending deletion');
       return;
     }
 
@@ -259,24 +248,18 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
           // Use ref to prevent multiple syncs if useEffect runs again
           if (syncFamilyTreeDoneRef.current !== currentUserId) {
             syncFamilyTreeDoneRef.current = currentUserId;
-            if (__DEV__) {
-              console.log('[ProfileContext] Syncing family tree after loading ego');
-            }
+            profileLogger.log('Syncing family tree after loading ego');
             try {
               await useSessionStore.getState().syncFamilyTree(currentUserId);
-              if (__DEV__) {
-                console.log('[ProfileContext] Family tree synced successfully');
-              }
+              profileLogger.log('Family tree synced successfully');
             } catch (error: any) {
-              console.error('[ProfileContext] Error syncing family tree', error);
+              profileLogger.error('Error syncing family tree', error);
               // Reset ref on error so it can retry on next check
               syncFamilyTreeDoneRef.current = null;
               // Don't fail profile flow if sync fails - relationships will be loaded on next sync
             }
           } else {
-            if (__DEV__) {
-              console.log('[ProfileContext] syncFamilyTree already called for this session, skipping');
-            }
+            profileLogger.log('syncFamilyTree already called for this session, skipping');
           }
           
           // Step 4: Profile exists → Make initial routing decision (ONLY ONCE)
@@ -317,7 +300,7 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } catch (err: any) {
-        console.error('[ProfileContext] Error checking user profile:', err);
+        profileLogger.error('Error checking user profile:', err);
         // Treat error as new user (safe fallback)
         useSessionStore.getState().clearEgo();
         setProfile(null);
@@ -329,11 +312,11 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
 
     profileCheckRef.current = checkProfile();
     // NOTE: Use session?.user?.id instead of entire session object to prevent unnecessary re-runs
-    // Include isSyncing in dependencies so we re-run when sync completes
-    // Include deletionStatus to detect when deletion is canceled (allows re-check)
-    // Remove router from dependencies - it's stable and doesn't need to be in deps
-    // Only re-run when user ID changes, loading state changes, sync state changes, or deletion status changes
-  }, [session?.user?.id, isAuthLoading, isSyncing, deletionStatus]);
+    // FIXED: Removed isSyncing and deletionStatus from dependencies to prevent stale closures
+    // We read fresh values inside useEffect instead
+    // Only re-run when user ID or loading state changes
+    // We check sync/deletion status inside the effect using fresh Zustand state
+  }, [session?.user?.id, isAuthLoading]);
 
   return (
     <ProfileContext.Provider value={{ profile, isLoadingProfile }}>

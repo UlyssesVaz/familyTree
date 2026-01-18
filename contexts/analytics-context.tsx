@@ -13,6 +13,9 @@ import React, { useEffect, useRef } from 'react';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { AuthSession } from '@/services/auth/types';
 import { getAuthService } from '@/services/auth';
+import { logger } from '@/utils/logger';
+
+const analyticsLogger = logger.withPrefix('AnalyticsContext');
 
 interface AnalyticsContextType {
   // No public API needed - this context only handles background sync
@@ -60,9 +63,7 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
               email: newSession.user.email ?? undefined,
             });
             
-            if (__DEV__) {
-              console.log('[AnalyticsContext] Promoted Statsig user to authenticated');
-            }
+            analyticsLogger.log('Promoted Statsig user to authenticated');
             
             // Log sign-in event immediately after user update
             statsigClient.logEvent('user_signs_in', 'google', {
@@ -73,9 +74,7 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
             // This is important for sign-in events that we want to track right away
             await statsigClient.flush();
             
-            if (__DEV__) {
-              console.log('[AnalyticsContext] Logged user_signs_in event to Statsig and flushed');
-            }
+            analyticsLogger.log('Logged user_signs_in event to Statsig and flushed');
           }
         } else if (!newSession && statsigClient && hadSession) {
           // Only log logout if we had a session before (detect actual logout, not initial state)
@@ -83,27 +82,19 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
           try {
             statsigClient.logEvent('logout');
             await statsigClient.flush();
-            if (__DEV__) {
-              console.log('[AnalyticsContext] Logged logout event to Statsig');
-            }
+            analyticsLogger.log('Logged logout event to Statsig');
           } catch (logoutError: any) {
-            if (__DEV__) {
-              console.warn('[AnalyticsContext] Could not log logout event:', logoutError);
-            }
+            analyticsLogger.warn('Could not log logout event:', logoutError);
           }
 
           // DEMOTE back to guest on logout
           await statsigClient.updateUserAsync({ userID: '' });
           
-          if (__DEV__) {
-            console.log('[AnalyticsContext] Demoted Statsig user to guest');
-          }
+          analyticsLogger.log('Demoted Statsig user to guest');
         }
       } catch (statsigError: any) {
         // Statsig error - log but don't block auth flow
-        if (__DEV__) {
-          console.warn('[AnalyticsContext] Could not update Statsig user:', statsigError);
-        }
+        analyticsLogger.warn('Could not update Statsig user:', statsigError);
       }
     });
 

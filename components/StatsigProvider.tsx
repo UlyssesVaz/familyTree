@@ -2,6 +2,7 @@
  * Statsig Provider Component (Pro Approach)
  * 
  * PRO APPROACH: Decoupled from Auth loading state
+ * - Preloads AsyncStorage before Statsig initializes (prevents race condition)
  * - Starts immediately as guest user (empty string)
  * - No dependency on AuthProvider - Statsig is above AuthProvider in tree
  * - AuthProvider will call client.updateUserAsync() when session changes
@@ -12,8 +13,12 @@
  * Family tree Person profiles are separate entities and should NOT be tracked by Statsig.
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { StatsigProviderExpo } from '@statsig/expo-bindings';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { logger } from '@/utils/logger';
+
+const statsigLogger = logger.withPrefix('Statsig');
 
 // Public SDK key - safe to hardcode (client SDK keys are designed for client apps)
 const STATSIG_SDK_KEY = 'client-BylGtWDdgGdoubn9e4DIuj6gGfAQRoed3c08Y7sYv0z';
@@ -21,14 +26,41 @@ const STATSIG_SDK_KEY = 'client-BylGtWDdgGdoubn9e4DIuj6gGfAQRoed3c08Y7sYv0z';
 /**
  * Statsig Provider Component
  * 
- * Starts Statsig immediately as a guest user.
+ * Preloads AsyncStorage, then starts Statsig as a guest user.
  * AuthProvider (child) will call client.updateUserAsync() when session changes.
  * This removes the "Initializing with user" loop and prevents multiple init warnings.
  */
 export function StatsigProvider({ children }: { children: React.ReactNode }) {
-  if (__DEV__) {
-    console.log('[Statsig] Starting as guest user (AuthProvider will update identity)');
+  const [isPreloaded, setIsPreloaded] = useState(false);
+
+  useEffect(() => {
+    async function preloadStorage() {
+      try {
+        // Preload AsyncStorage before Statsig tries to use it
+        // Do a dummy read/write to ensure AsyncStorage is initialized
+        const testKey = '__statsig_preload_test__';
+        await AsyncStorage.getItem(testKey);
+        await AsyncStorage.setItem(testKey, '1');
+        await AsyncStorage.removeItem(testKey);
+        
+        setIsPreloaded(true);
+        statsigLogger.log('AsyncStorage preloaded, initializing Statsig');
+      } catch (error) {
+        // If preload fails, proceed anyway (Statsig will work but may show warning)
+        statsigLogger.warn('Failed to preload AsyncStorage:', error);
+        setIsPreloaded(true);
+      }
+    }
+
+    preloadStorage();
+  }, []);
+
+  // Wait for AsyncStorage to be ready before initializing Statsig
+  if (!isPreloaded) {
+    return null; // Very brief delay (usually <50ms)
   }
+
+  statsigLogger.log('Starting as guest user (AuthProvider will update identity)');
 
   return (
     <StatsigProviderExpo

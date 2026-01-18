@@ -141,36 +141,24 @@ export default function JoinScreen() {
       setScreenState('success');
       
       // Refresh family tree to load the claimed profile
-      // CRITICAL: Wait for sync to complete before navigating
-      try {
-        await syncFamilyTreeMutation.mutateAsync(session.user.id);
-        
-        // Verify ego is loaded (React Query will have updated after sync)
-        if (!ego) {
-          throw new Error('Failed to load profile after claim');
-        }
-        
-        // Verify people are loaded
-        const peopleCount = peopleArray.length;
-        if (peopleCount === 0) {
-          throw new Error('Failed to load family tree after claim');
-        }
-        
-        if (__DEV__) {
-          console.log(`[JoinScreen] Sync verified: ego=${ego.name}, people=${peopleCount}`);
-        }
-        
-        // Navigate with success feedback (shorter delay since we know data is loaded)
-        setTimeout(() => {
+      // FIXED: Use onSuccess callback to wait for React Query cache to update
+      // This prevents race condition where navigation happens before cache is ready
+      syncFamilyTreeMutation.mutate(session.user.id, {
+        onSuccess: () => {
+          // React Query cache is now updated - navigate immediately
+          // No setTimeout needed - data is ready in cache
+          if (__DEV__) {
+            console.log(`[JoinScreen] Sync completed, navigating to home`);
+          }
           router.replace('/(tabs)');
-        }, 800);
-        
-      } catch (syncError: any) {
-        console.error('[JoinScreen] Error after claim:', syncError);
-        setScreenState('error');
-        setErrorMessage('Your profile was claimed but we couldn\'t load your family tree. Please restart the app.');
-        hasAttemptedClaimRef.current = false; // Allow retry
-      }
+        },
+        onError: (syncError: any) => {
+          console.error('[JoinScreen] Error syncing after claim:', syncError);
+          setScreenState('error');
+          setErrorMessage('Your profile was claimed but we couldn\'t load your family tree. Please restart the app.');
+          hasAttemptedClaimRef.current = false; // Allow retry
+        },
+      });
     } catch (err: any) {
       console.error('[JoinScreen] Error claiming invitation:', err);
       

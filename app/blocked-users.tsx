@@ -22,7 +22,6 @@ import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
 import { useBlockedUsers, useUnblockUser } from '@/hooks/use-blocked-users';
 import { usePeople, useUpdatePerson } from '@/hooks/use-people';
-import { useSyncFamilyTree } from '@/hooks/use-session';
 
 interface BlockedUser {
   userId: string; // auth.users.id
@@ -44,7 +43,6 @@ export default function BlockedUsersScreen() {
   const { data: blockedUsers = [], isLoading } = useBlockedUsers();
   const unblockMutation = useUnblockUser();
   const updatePersonMutation = useUpdatePerson();
-  const syncFamilyTreeMutation = useSyncFamilyTree();
   const { data: peopleArray = [] } = usePeople();
 
   const handleUnblock = (blockedUser: BlockedUser) => {
@@ -132,22 +130,12 @@ export default function BlockedUsersScreen() {
               }
               
               // STEP 3: Trigger React Query unblock mutation (handles API call, optimistic update, rollback)
+              // NOTE: React Query automatically invalidates and refetches familyTree on success
+              // No manual sync needed - removing duplicate sync to prevent race condition
               unblockMutation.mutate(
                 { blockedUserId: userId },
                 {
-                  onSuccess: async () => {
-                    // Sync family tree after successful unblock using React Query
-                    if (session?.user?.id) {
-                      try {
-                        await syncFamilyTreeMutation.mutateAsync(session.user.id);
-                        if (__DEV__) {
-                          console.log('[BlockedUsers] Sync completed after unblock');
-                        }
-                      } catch (syncError) {
-                        console.warn('[BlockedUsers] Sync after unblock failed (non-fatal):', syncError);
-                      }
-                    }
-                    
+                  onSuccess: () => {
                     // Log event
                     logStatsigEvent(statsigClient, 'user_unblocked', {
                       unblocked_user_id: userId,

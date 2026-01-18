@@ -37,9 +37,6 @@ interface PersonCardProps {
  * - Pressable (if onPress is provided)
  */
 export function PersonCard({ person, width = 200, onPress, onAddPress, showAddButton = false, isBlocked = false }: PersonCardProps) {
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'PersonCard.tsx:39',message:'PersonCard entry',data:{personId:person.id,personName:person.name||'',isPlaceholder:!!person.isPlaceholder,isBlockedProp:isBlocked,linkedAuthUserId:person.linkedAuthUserId||''},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,D'})}).catch(()=>{});
-  // #endregion
   const colorScheme = useColorScheme();
   const theme = colorScheme ?? 'light';
   const colors = Colors[theme];
@@ -47,9 +44,6 @@ export function PersonCard({ person, width = 200, onPress, onAddPress, showAddBu
   // 🆕 Render placeholder for blocked/deleted users - just a grey circle, no card, no name, not clickable
   // CRITICAL: Check isPlaceholder FIRST - if true, return ONLY grey circle with NO name, dates, or other info
   if (person.isPlaceholder === true) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'PersonCard.tsx:45',message:'PersonCard rendering placeholder',data:{personId:person.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,D'})}).catch(()=>{});
-    // #endregion
     // Return ONLY grey circle placeholder - absolutely nothing else (no name, no dates, no card wrapper, not clickable)
     return (
       <View style={styles.placeholderContainer}>
@@ -65,9 +59,6 @@ export function PersonCard({ person, width = 200, onPress, onAddPress, showAddBu
     );
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'PersonCard.tsx:60',message:'PersonCard rendering normal card',data:{personId:person.id,personName:person.name||'',isBlockedProp:isBlocked},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
   const genderColor = getGenderColor(person.gender, colors.icon);
   const dateRange = formatDateRange(person.birthDate, person.deathDate);
   
