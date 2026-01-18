@@ -3,6 +3,8 @@ import { View, Text, StyleSheet } from 'react-native';
 
 interface Props {
   children: ReactNode;
+  fallback?: ReactNode | ((error: Error) => ReactNode);
+  onReset?: () => void;
 }
 
 interface State {
@@ -30,13 +32,29 @@ export class ErrorBoundary extends Component<Props, State> {
     // });
   }
 
+  handleReset = () => {
+    this.setState({ hasError: false, error: null });
+    if (this.props.onReset) {
+      this.props.onReset();
+    }
+  };
+
   render() {
-    if (this.state.hasError) {
+    if (this.state.hasError && this.state.error) {
+      // Use custom fallback if provided
+      if (this.props.fallback) {
+        if (typeof this.props.fallback === 'function') {
+          return this.props.fallback(this.state.error);
+        }
+        return this.props.fallback;
+      }
+
+      // Default fallback UI
       return (
         <View style={styles.container}>
           <Text style={styles.title}>Something went wrong</Text>
-          <Text style={styles.message}>{this.state.error?.message}</Text>
-          {__DEV__ && this.state.error?.stack && (
+          <Text style={styles.message}>{this.state.error.message}</Text>
+          {__DEV__ && this.state.error.stack && (
             <Text style={styles.stack}>{this.state.error.stack}</Text>
           )}
         </View>

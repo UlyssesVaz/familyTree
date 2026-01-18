@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { handleSupabaseMutation } from '@/utils/supabase-error-handler';
 import { uploadPhotoIfLocal } from './shared/photo-upload';
 import { mapUpdateRow, type UpdatesRow } from './shared/mappers';
-import { getBlockedUsers } from './blocks-api';
+import { getBlockedUserIds } from './blocks-api';
 
 /**
  * Database row type for update_tags table
@@ -36,6 +36,67 @@ export interface CreateUpdateInput {
 }
 
 /**
+ * Upload photo for update and return URL (separate function)
+ * 
+ * @param localPhotoUrl - Local file URI or remote URL
+ * @param userId - The authenticated user's ID
+ * @returns Uploaded URL or null
+ */
+async function preparePhotoForUpdate(
+  localPhotoUrl: string | undefined,
+  userId: string
+): Promise<string | null> {
+  if (!localPhotoUrl) {
+    return null;
+  }
+  
+  // If not a local file URI, return original URL
+  if (!localPhotoUrl.startsWith('file://')) {
+    return localPhotoUrl;
+  }
+  
+  try {
+    const uploadedUrl = await uploadPhotoIfLocal(
+      localPhotoUrl,
+      STORAGE_BUCKETS.UPDATE_PHOTOS,
+      userId, // Single folder level: organize by creator only
+      'Updates API'
+    );
+    
+    return uploadedUrl ?? null;
+  } catch (error: any) {
+    console.warn('[Updates API] Photo upload failed, continuing without photo:', error);
+    // Continue without photo rather than failing entirely
+    return null;
+  }
+}
+
+/**
+ * Create update in database (pure data operation)
+ * 
+ * @param updateData - Update data to insert
+ * @returns Created update row
+ */
+async function createUpdateRecord(
+  updateData: Omit<UpdatesRow, 'created_at' | 'updated_at' | 'deleted_at'>
+): Promise<UpdatesRow> {
+  const supabase = getSupabaseClient();
+  
+  // Insert into database (UUID primary key allows multiple posts per user per wall)
+  // Note: RLS policies now allow SELECT after INSERT, so .select() should work
+  const { data, error } = await supabase
+    .from('updates')
+    .insert(updateData)
+    .select()
+    .single();
+  
+  return handleSupabaseMutation(data, error, {
+    apiName: 'Updates API',
+    operation: 'create update',
+  });
+}
+
+/**
  * Create a new update in Supabase
  * 
  * IMPORTANT: 
@@ -55,30 +116,13 @@ export async function createUpdate(
   const supabase = getSupabaseClient();
   const authenticatedUserId = userId;
   
-  // STEP 1: Upload photo if it's a local file URI
-  let photoUrl: string | null = input.photoUrl || null;
-  
-  if (input.photoUrl && input.photoUrl.startsWith('file://')) {
-    try {
-      const uploadedUrl = await uploadPhotoIfLocal(
-        input.photoUrl,
-        STORAGE_BUCKETS.UPDATE_PHOTOS,
-        authenticatedUserId, // Single folder level: organize by creator only
-        'Updates API'
-      );
-      
-      if (uploadedUrl) {
-        photoUrl = uploadedUrl; // Use uploaded URL instead of local URI
-      } else {
-        console.warn('[Updates API] Photo upload returned null, continuing without photo');
-        photoUrl = null;
-      }
-    } catch (error: any) {
-      console.error('[Updates API] Error uploading photo:', error);
-      // Don't fail the entire update creation if photo upload fails
-      // Continue without photo - user can try again
-      photoUrl = null;
-    }
+  // STEP 1: Upload photo first (can retry independently)
+  let photoUrl: string | null = null;
+  try {
+    photoUrl = await preparePhotoForUpdate(input.photoUrl, authenticatedUserId);
+  } catch (photoError) {
+    console.warn('[Updates API] Photo upload failed, continuing without photo:', photoError);
+    // Continue without photo rather than failing entirely
   }
   
   // STEP 2: Generate UUID for the new update
@@ -95,23 +139,13 @@ export async function createUpdate(
     user_id: input.personId, // FK to people.user_id (the person whose wall this is)
     created_by: authenticatedUserId, // FK to auth.users.id (MUST be auth.uid() for RLS)
     title: input.title.trim(),
-    photo_url: photoUrl || null, // Use uploaded URL or original remote URL
+    photo_url: photoUrl, // Use uploaded URL or original remote URL
     caption: input.caption?.trim() || null,
     is_public: input.isPublic ?? true, // Default to public
   };
   
-  // STEP 4: Insert into database (UUID primary key allows multiple posts per user per wall)
-  // Note: RLS policies now allow SELECT after INSERT, so .select() should work
-  const { data, error } = await supabase
-    .from('updates')
-    .insert(row)
-    .select()
-    .single();
-  
-  const result = handleSupabaseMutation(data, error, {
-    apiName: 'Updates API',
-    operation: 'create update',
-  });
+  // STEP 4: Create database record
+  const result = await createUpdateRecord(row);
   
   // STEP 5: Create update_tags entries if taggedPersonIds provided
   if (input.taggedPersonIds && input.taggedPersonIds.length > 0) {
@@ -228,15 +262,13 @@ export async function getAllUpdates(currentUserId?: string): Promise<Update[]> {
     .filter((id): id is string => id !== null);
   
   // STEP 1.5: Get blocked user IDs (if currentUserId is provided)
-  let blockedUserIds: string[] = [];
-  if (currentUserId) {
-    try {
-      blockedUserIds = await getBlockedUsers(currentUserId);
-    } catch (error) {
-      console.error('[Updates API] Error fetching blocked users:', error);
-      // Continue without blocking filter if it fails
-    }
-  }
+  const blockedUserIdsSet = currentUserId 
+    ? await getBlockedUserIds(currentUserId).catch((error) => {
+        console.error('[Updates API] Error fetching blocked users:', error);
+        // Continue without blocking filter if it fails
+        return new Set<string>();
+      })
+    : new Set<string>();
   
   // STEP 2: Query all updates, filtering out updates from deleted users
   let query = supabase
@@ -298,9 +330,8 @@ export async function getAllUpdates(currentUserId?: string): Promise<Update[]> {
   // Note: Updates from 'deactivate_profile' users are kept (their content remains visible)
   // This is important: 'delete_profile' means hide everything, 'deactivate_profile' means keep content visible
   const deletedUserIdsSet = new Set(deletedUserIds);
-  const blockedUserIdsSet = new Set(blockedUserIds);
   
-  if (deletedUserIds.length > 0 || blockedUserIds.length > 0) {
+  if (deletedUserIds.length > 0 || blockedUserIdsSet.size > 0) {
     updates = updates.filter(update => {
       // Filter out updates created by users who requested 'delete_profile' deletion
       // createdBy is the user ID (from auth.users) who created the update
@@ -430,6 +461,102 @@ export interface UpdateUpdateInput {
 }
 
 /**
+ * Prepare photo for update (handles upload/replacement/deletion)
+ * 
+ * @param newPhotoUrl - New photo URL (local file URI, remote URL, or null to delete)
+ * @param existingPhotoUrl - Current photo URL
+ * @param userId - The authenticated user's ID
+ * @returns New photo URL or null
+ */
+async function preparePhotoForUpdateEdit(
+  newPhotoUrl: string | undefined | null,
+  existingPhotoUrl: string | null,
+  userId: string
+): Promise<string | null> {
+  // If explicitly null or empty string, delete photo
+  if (newPhotoUrl === null || newPhotoUrl === '') {
+    // Delete old photo if it exists and is from Storage
+    if (existingPhotoUrl) {
+      const storageUrlPattern = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
+      const match = existingPhotoUrl.match(storageUrlPattern);
+      if (match) {
+        const bucket = match[1];
+        const filePath = match[2];
+        try {
+          await deleteImage(filePath, bucket);
+        } catch (error) {
+          console.warn('[Updates API] Error deleting photo, continuing with update:', error);
+        }
+      }
+    }
+    return null;
+  }
+  
+  // If no new photo provided, keep existing
+  if (newPhotoUrl === undefined) {
+    return existingPhotoUrl ?? null;
+  }
+  
+  // If not a local file URI, use as-is (remote URL)
+  if (!newPhotoUrl.startsWith('file://')) {
+    return newPhotoUrl;
+  }
+  
+  // Upload local file (delete old photo first if it exists)
+  try {
+    // Delete old photo if it exists and is from Storage
+    if (existingPhotoUrl) {
+      const storageUrlPattern = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
+      const match = existingPhotoUrl.match(storageUrlPattern);
+      if (match) {
+        const bucket = match[1];
+        const filePath = match[2];
+        try {
+          await deleteImage(filePath, bucket);
+        } catch (error) {
+          console.warn('[Updates API] Error deleting old photo, continuing with upload:', error);
+        }
+      }
+    }
+    
+    // Upload new photo
+    const uploadedUrl = await preparePhotoForUpdate(newPhotoUrl, userId);
+    return uploadedUrl ?? existingPhotoUrl ?? null;
+  } catch (error: any) {
+    console.warn('[Updates API] Photo upload failed, keeping existing photo:', error);
+    // Keep existing photo rather than failing entirely
+    return existingPhotoUrl ?? null;
+  }
+}
+
+/**
+ * Update update in database (pure data operation)
+ * 
+ * @param updateId - The UUID of the update
+ * @param updateData - Update data
+ * @returns Updated update row
+ */
+async function updateUpdateRecord(
+  updateId: string,
+  updateData: Partial<UpdatesRow>
+): Promise<UpdatesRow> {
+  const supabase = getSupabaseClient();
+  
+  // Update database row
+  const { data, error } = await supabase
+    .from('updates')
+    .update(updateData)
+    .eq('updates_id', updateId)
+    .select()
+    .single();
+  
+  return handleSupabaseMutation(data, error, {
+    apiName: 'Updates API',
+    operation: 'update update',
+  });
+}
+
+/**
  * Update an existing update in Supabase
  * 
  * IMPORTANT: 
@@ -471,62 +598,14 @@ export async function updateUpdate(
     throw new Error('Unauthorized: You can only edit your own updates');
   }
   
-  // STEP 2: Handle photo upload/replacement if new photo provided
-  let photoUrl: string | null = input.photoUrl || existingUpdate.photo_url || null;
-  
-  if (input.photoUrl && input.photoUrl.startsWith('file://')) {
-    try {
-      // Delete old photo if it exists and is from Storage
-      if (existingUpdate.photo_url) {
-        const storageUrlPattern = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
-        const match = existingUpdate.photo_url.match(storageUrlPattern);
-        if (match) {
-          const bucket = match[1];
-          const filePath = match[2];
-          try {
-            await deleteImage(filePath, bucket);
-          } catch (error) {
-            console.warn('[Updates API] Error deleting old photo, continuing with upload:', error);
-          }
-        }
-      }
-      
-      // Upload new photo
-      const uploadedUrl = await uploadPhotoIfLocal(
-        input.photoUrl,
-        STORAGE_BUCKETS.UPDATE_PHOTOS,
-        userId,
-        'Updates API'
-      );
-      
-      if (uploadedUrl) {
-        photoUrl = uploadedUrl;
-      } else {
-        console.warn('[Updates API] Photo upload returned null, keeping existing photo');
-        photoUrl = existingUpdate.photo_url || null;
-      }
-    } catch (error: any) {
-      console.error('[Updates API] Error uploading photo:', error);
-      // Don't fail the entire update if photo upload fails
-      // Keep existing photo
-      photoUrl = existingUpdate.photo_url || null;
-    }
-  } else if (input.photoUrl === null || input.photoUrl === '') {
-    // Explicitly remove photo
-    if (existingUpdate.photo_url) {
-      const storageUrlPattern = /\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/;
-      const match = existingUpdate.photo_url.match(storageUrlPattern);
-      if (match) {
-        const bucket = match[1];
-        const filePath = match[2];
-        try {
-          await deleteImage(filePath, bucket);
-        } catch (error) {
-          console.warn('[Updates API] Error deleting photo, continuing with update:', error);
-        }
-      }
-    }
-    photoUrl = null;
+  // STEP 2: Prepare photo first (can retry independently)
+  let photoUrl: string | null | undefined = undefined;
+  if (input.photoUrl !== undefined) {
+    photoUrl = await preparePhotoForUpdateEdit(
+      input.photoUrl,
+      existingUpdate.photo_url,
+      userId
+    );
   }
   
   // STEP 3: Prepare update data (only include fields that are being changed)
@@ -547,18 +626,8 @@ export async function updateUpdate(
     updateData.is_public = input.isPublic;
   }
   
-  // STEP 4: Update database row
-  const { data, error } = await supabase
-    .from('updates')
-    .update(updateData)
-    .eq('updates_id', updateId)
-    .select()
-    .single();
-  
-  const result = handleSupabaseMutation(data, error, {
-    apiName: 'Updates API',
-    operation: 'update update',
-  });
+  // STEP 4: Update database record
+  const result = await updateUpdateRecord(updateId, updateData);
   
   // STEP 5: Update update_tags if taggedPersonIds provided
   if (input.taggedPersonIds !== undefined) {

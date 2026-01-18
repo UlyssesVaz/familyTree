@@ -139,23 +139,36 @@ export default function JoinScreen() {
       
       // Refresh family tree to load the claimed profile
       // CRITICAL: Wait for sync to complete before navigating
-      await useSessionStore.getState().syncFamilyTree(session.user.id);
-      
-      // Verify data is loaded before navigating
-      const people = usePeopleStore.getState().people;
-      if (people.size === 0) {
-        console.error('[JoinScreen] Sync completed but no people loaded');
-        setErrorMessage('Failed to load family tree. Please try again.');
-        hasAttemptedClaimRef.current = false; // Allow retry
+      try {
+        await useSessionStore.getState().syncFamilyTree(session.user.id);
+        
+        // Verify ego is loaded
+        const ego = useSessionStore.getState().getEgo();
+        if (!ego) {
+          throw new Error('Failed to load profile after claim');
+        }
+        
+        // Verify people are loaded
+        const peopleCount = usePeopleStore.getState().people.size;
+        if (peopleCount === 0) {
+          throw new Error('Failed to load family tree after claim');
+        }
+        
+        if (__DEV__) {
+          console.log(`[JoinScreen] Sync verified: ego=${ego.name}, people=${peopleCount}`);
+        }
+        
+        // Navigate with success feedback (shorter delay since we know data is loaded)
+        setTimeout(() => {
+          router.replace('/(tabs)');
+        }, 800);
+        
+      } catch (syncError: any) {
+        console.error('[JoinScreen] Error after claim:', syncError);
         setScreenState('error');
-        return;
+        setErrorMessage('Your profile was claimed but we couldn\'t load your family tree. Please restart the app.');
+        hasAttemptedClaimRef.current = false; // Allow retry
       }
-      
-      // Navigate to home after a brief delay to show success state
-      // Sync has completed and data is loaded - safe to navigate
-      setTimeout(() => {
-        router.replace('/(tabs)');
-      }, 1500);
     } catch (err: any) {
       console.error('[JoinScreen] Error claiming invitation:', err);
       

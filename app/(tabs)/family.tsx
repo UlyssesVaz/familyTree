@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { HamburgerMenuButton } from '@/components/settings/SettingsHeader';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 import { AddUpdateModal, ReportAbuseModal, type ReportReason } from '@/components/family-tree';
 import { reportContent } from '@/services/supabase/reports-api';
@@ -69,12 +70,47 @@ export default function FamilyScreen() {
   return (
     <View style={[styles.wrapper, { backgroundColor, paddingTop: topInset }]}>
       <HamburgerMenuButton />
-      <ScrollView 
-        style={styles.scrollView} 
-        contentContainerStyle={styles.scrollContent}
-        contentInsetAdjustmentBehavior="automatic"
+      <ErrorBoundary
+        fallback={(error) => (
+          <ThemedView style={styles.errorContainer}>
+            <MaterialIcons name="error-outline" size={64} color="#FF3B30" />
+            <ThemedText type="title" style={styles.errorTitle}>
+              Failed to Load Family Feed
+            </ThemedText>
+            <ThemedText style={styles.errorText}>{error.message}</ThemedText>
+            {__DEV__ && error.stack && (
+              <ThemedText style={styles.errorStack}>{error.stack}</ThemedText>
+            )}
+            <Pressable 
+              onPress={() => {
+                // Retry sync
+                if (session?.user?.id) {
+                  useSessionStore.getState().syncFamilyTree(session.user.id).catch((syncError) => {
+                    console.error('[FamilyScreen] Error retrying sync:', syncError);
+                  });
+                }
+              }}
+              style={[styles.retryButton, { backgroundColor: colors.tint }]}
+            >
+              <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
+            </Pressable>
+          </ThemedView>
+        )}
+        onReset={() => {
+          // Reset error boundary state
+          if (session?.user?.id) {
+            useSessionStore.getState().syncFamilyTree(session.user.id).catch((syncError) => {
+              console.error('[FamilyScreen] Error retrying sync after reset:', syncError);
+            });
+          }
+        }}
       >
-        <ThemedView style={[styles.container, { paddingTop: contentPaddingTop }]}>
+        <ScrollView 
+          style={styles.scrollView} 
+          contentContainerStyle={styles.scrollContent}
+          contentInsetAdjustmentBehavior="automatic"
+        >
+          <ThemedView style={[styles.container, { paddingTop: contentPaddingTop }]}>
           {/* Family Header Section */}
           <View style={styles.familyHeader}>
             {/* Family Photo - Circular placeholder for now */}
@@ -349,6 +385,7 @@ export default function FamilyScreen() {
           </View>
         </ThemedView>
       </ScrollView>
+      </ErrorBoundary>
 
       {/* Add/Edit Update Modal */}
       {ego && (
@@ -628,6 +665,40 @@ const styles = StyleSheet.create({
   taggedText: {
     fontSize: 13,
     opacity: 0.8,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  errorTitle: {
+    marginTop: 16,
+    marginBottom: 8,
+    fontSize: 20,
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 24,
+    opacity: 0.7,
+  },
+  errorStack: {
+    fontSize: 12,
+    fontFamily: 'monospace',
+    marginBottom: 24,
+    opacity: 0.5,
+    textAlign: 'left',
+  },
+  retryButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 

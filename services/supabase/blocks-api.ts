@@ -15,6 +15,13 @@
 import { getSupabaseClient } from './supabase-init';
 import { handleSupabaseQuery, handleSupabaseMutation } from '@/utils/supabase-error-handler';
 
+/**
+ * Cache for blocked user IDs to reduce database queries
+ * Map<userId, { ids: Set<string>, timestamp: number }>
+ */
+const blockedUsersCache = new Map<string, { ids: Set<string>, timestamp: number }>();
+const CACHE_TTL = 60000; // 1 minute
+
 export interface BlockRecord {
   id: string;
   blockerId: string; // User who initiated the block (auth.users.id)
@@ -65,6 +72,9 @@ export async function blockUser(
     operation: 'block user',
   });
 
+  // Invalidate cache after blocking
+  invalidateBlockedUsersCache(blockerId);
+
   return {
     id: result.id,
     blockerId: result.blocker_id,
@@ -102,6 +112,9 @@ export async function unblockUser(
       apiName: 'Blocks API',
       operation: 'unblock user',
     });
+  } else {
+    // Invalidate cache after unblocking (even if block didn't exist)
+    invalidateBlockedUsersCache(blockerId);
   }
 }
 
@@ -147,21 +160,51 @@ export async function getBlock(
  * 
  * @param blockerId - The authenticated user's ID (auth.users.id)
  * @returns Array of blocked user IDs
+ * @deprecated Use getBlockedUserIds instead for cached results
  */
 export async function getBlockedUsers(blockerId: string): Promise<string[]> {
-  const supabase = getSupabaseClient();
+  const blockedIds = await getBlockedUserIds(blockerId);
+  return Array.from(blockedIds);
+}
 
-  const { data, error } = await supabase
+/**
+ * Get all blocked user IDs for the current user (cached)
+ * 
+ * This function implements caching to reduce database queries.
+ * Cache is invalidated when blocking/unblocking occurs.
+ * 
+ * @param currentUserId - The authenticated user's ID (auth.users.id)
+ * @returns Set of blocked user IDs
+ */
+export async function getBlockedUserIds(currentUserId: string): Promise<Set<string>> {
+  // Check cache
+  const cached = blockedUsersCache.get(currentUserId);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.ids;
+  }
+  
+  // Fetch from DB
+  const supabase = getSupabaseClient();
+  const { data: blocks } = await supabase
     .from('user_blocks')
     .select('blocked_id')
-    .eq('blocker_id', blockerId);
+    .eq('blocker_id', currentUserId);
+  
+  const blockedUserIds = new Set(blocks?.map(b => b.blocked_id) || []);
+  
+  // Update cache
+  blockedUsersCache.set(currentUserId, { ids: blockedUserIds, timestamp: Date.now() });
+  
+  return blockedUserIds;
+}
 
-  if (error) {
-    console.error('[Blocks API] Error fetching blocked users:', error);
-    return [];
-  }
-
-  return (data || []).map((row) => row.blocked_id);
+/**
+ * Invalidate cache when blocking/unblocking
+ * 
+ * @param userId - The user ID whose cache should be invalidated
+ */
+export function invalidateBlockedUsersCache(userId: string) {
+  blockedUsersCache.delete(userId);
 }
 
 /**

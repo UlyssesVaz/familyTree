@@ -14,6 +14,7 @@ import { mapPersonRow, type PeopleRow } from './shared/mappers';
 import { calculateAge, isAtLeast13 } from '@/utils/age-utils';
 import { processAccountDeletion, processCOPPADeletion } from './account-api';
 import { isCOPPABlocked, clearCOPPACache } from '@/utils/coppa-utils';
+import { getBlockedUserIds } from './blocks-api';
 
 /**
  * Custom error class for COPPA violations - account deleted
@@ -75,6 +76,60 @@ export async function getUserProfile(userId: string): Promise<Person | null> {
 }
 
 /**
+ * Upload photo and return URL (separate function)
+ * 
+ * @param localPhotoUrl - Local file URI or remote URL
+ * @param bucket - Storage bucket name
+ * @param path - Folder path within bucket
+ * @returns Uploaded URL or undefined
+ */
+async function preparePhotoForProfile(
+  localPhotoUrl: string | undefined,
+  bucket: string,
+  path: string
+): Promise<string | undefined> {
+  try {
+    return await uploadPhotoIfLocal(localPhotoUrl, bucket, path, 'People API') ?? undefined;
+  } catch (photoError) {
+    console.warn('[People API] Photo upload failed, continuing without photo:', photoError);
+    // Continue without photo rather than failing entirely
+    return undefined;
+  }
+}
+
+/**
+ * Create profile in database (pure data operation)
+ * 
+ * @param userId - The authenticated user's ID
+ * @param profileData - Profile data to insert
+ * @returns Created or existing profile row
+ */
+async function createProfileRecord(
+  userId: string,
+  profileData: any
+): Promise<PeopleRow> {
+  const supabase = getSupabaseClient();
+  
+  // Atomic upsert - database handles race condition
+  // ✅ CRITICAL: No check-before-create (TOCTOU vulnerability fixed)
+  // Database UNIQUE constraint on linked_auth_user_id ensures atomicity
+  // If profile exists, returns existing profile (idempotent operation)
+  const { data, error } = await supabase
+    .from('people')
+    .upsert(profileData, {
+      onConflict: 'linked_auth_user_id', // UNIQUE constraint on this column
+      ignoreDuplicates: false, // Return the row if it exists
+    })
+    .select()
+    .single();
+  
+  return handleSupabaseMutation(data, error, {
+    apiName: 'People API',
+    operation: 'create or get ego profile',
+  });
+}
+
+/**
  * Create a new person profile (ego) in Supabase
  * 
  * IMPORTANT: 
@@ -92,8 +147,6 @@ export async function createEgoProfile(
   userId: string,
   input: CreatePersonInput
 ): Promise<Person> {
-  const supabase = getSupabaseClient();
-  
   // STEP 1: COPPA Compliance - Check if user is blocked from re-registration
   const isBlocked = await isCOPPABlocked(userId);
   if (isBlocked) {
@@ -102,13 +155,12 @@ export async function createEgoProfile(
     );
   }
   
-  // STEP 2: Upload photo to Supabase Storage if it's a local file URI
-  const photoUrl = await uploadPhotoIfLocal(
+  // STEP 2: Upload photo first (can retry independently)
+  const photoUrl = await preparePhotoForProfile(
     input.photoUrl,
     STORAGE_BUCKETS.PERSON_PHOTOS,
-    `profiles/${userId}`,
-    'People API'
-  ) ?? undefined;
+    `profiles/${userId}`
+  );
   
   // STEP 3: Prepare database row
   const row: any = {
@@ -127,26 +179,40 @@ export async function createEgoProfile(
     row.privacy_policy_accepted_at = input.privacyPolicyAcceptedAt;
   }
   
-  // STEP 4: Atomic upsert - database handles race condition
-  // ✅ CRITICAL: No check-before-create (TOCTOU vulnerability fixed)
-  // Database UNIQUE constraint on linked_auth_user_id ensures atomicity
-  // If profile exists, returns existing profile (idempotent operation)
-  const { data, error } = await supabase
-    .from('people')
-    .upsert(row, {
-      onConflict: 'linked_auth_user_id', // UNIQUE constraint on this column
-      ignoreDuplicates: false, // Return the row if it exists
-    })
-    .select()
-    .single();
-  
-  const result = handleSupabaseMutation(data, error, {
-    apiName: 'People API',
-    operation: 'create or get ego profile',
-  });
+  // STEP 4: Create database record
+  const result = await createProfileRecord(userId, row);
   
   return mapPersonRow(result);
 }
+/**
+ * Update profile in database (pure data operation)
+ * 
+ * @param userId - The authenticated user's ID
+ * @param updateRow - Update data
+ * @returns Updated profile row
+ */
+async function updateProfileRecord(
+  userId: string,
+  updateRow: Partial<PeopleRow>
+): Promise<PeopleRow> {
+  const supabase = getSupabaseClient();
+  
+  // Update database row (only update fields that changed)
+  // NOTE: Query by linked_auth_user_id (not user_id) since user_id is now DB-generated
+  // linked_auth_user_id is the bridge to Supabase Auth (userId from auth.users)
+  const { data, error } = await supabase
+    .from('people')
+    .update(updateRow)
+    .eq('linked_auth_user_id', userId) // Security: Only update if linked_auth_user_id matches
+    .select()
+    .single();
+  
+  return handleSupabaseMutation(data, error, {
+    apiName: 'People API',
+    operation: 'update ego profile',
+  });
+}
+
 /**
  * Update user's profile (ego) in Supabase
  * 
@@ -164,8 +230,6 @@ export async function updateEgoProfile(
   userId: string,
   updates: Partial<Pick<Person, 'name' | 'bio' | 'birthDate' | 'gender' | 'photoUrl'>>
 ): Promise<Person> {
-  const supabase = getSupabaseClient();
-  
   // STEP 0: Verify profile exists and user owns it
   const existingProfile = await getUserProfile(userId);
   if (!existingProfile) {
@@ -179,14 +243,21 @@ export async function updateEgoProfile(
     throw new Error('Unauthorized: You can only update your own profile.');
   }
   
-  // STEP 1: Upload photo to Supabase Storage if it's a local file URI
-  // This must complete BEFORE we save to database
-  const photoUrl = await uploadPhotoIfLocal(
-    updates.photoUrl,
-    STORAGE_BUCKETS.PERSON_PHOTOS,
-    `profiles/${userId}`,
-    'People API'
-  ) ?? undefined; // Convert null to undefined for consistency
+  // STEP 1: Upload photo first (can retry independently)
+  let photoUrl: string | undefined;
+  if (updates.photoUrl !== undefined) {
+    try {
+      photoUrl = await preparePhotoForProfile(
+        updates.photoUrl,
+        STORAGE_BUCKETS.PERSON_PHOTOS,
+        `profiles/${userId}`
+      );
+    } catch (photoError) {
+      console.warn('[People API] Photo upload failed, continuing without photo:', photoError);
+      // Continue without photo rather than failing entirely
+      photoUrl = undefined;
+    }
+  }
   
   // STEP 2: Prepare update object (only include fields that are being updated)
   // Map TypeScript types to PostgreSQL schema
@@ -220,20 +291,8 @@ export async function updateEgoProfile(
   // But we can explicitly set it if your schema requires it
   // updateRow.updated_at = new Date().toISOString();
   
-  // STEP 3: Update database row (only update fields that changed)
-  // NOTE: Query by linked_auth_user_id (not user_id) since user_id is now DB-generated
-  // linked_auth_user_id is the bridge to Supabase Auth (userId from auth.users)
-  const { data, error } = await supabase
-    .from('people')
-    .update(updateRow)
-    .eq('linked_auth_user_id', userId) // Security: Only update if linked_auth_user_id matches
-    .select()
-    .single();
-  
-  const result = handleSupabaseMutation(data, error, {
-    apiName: 'People API',
-    operation: 'update ego profile',
-  });
+  // STEP 3: Update database record
+  const result = await updateProfileRecord(userId, updateRow);
   
   // STEP 4: COPPA Compliance - Check age after birth date update
   // If birth date was updated and user is now under 13, immediately delete account
@@ -270,6 +329,33 @@ export async function updateEgoProfile(
 }
 
 /**
+ * Create relative profile in database (pure data operation)
+ * 
+ * @param userId - The authenticated user's ID
+ * @param profileData - Profile data to insert
+ * @returns Created profile row
+ */
+async function createRelativeProfileRecord(
+  userId: string,
+  profileData: any
+): Promise<PeopleRow> {
+  const supabase = getSupabaseClient();
+  
+  // Insert into database
+  // CRITICAL: .select() is required to get the new user_id back from the database
+  const { data, error } = await supabase
+    .from('people')
+    .insert(profileData)
+    .select() // This is important to get the new user_id back
+    .single();
+  
+  return handleSupabaseMutation(data, error, {
+    apiName: 'People API',
+    operation: 'create relative',
+  });
+}
+
+/**
  * Create a new relative (non-ego person) in Supabase
  * 
  * IMPORTANT: 
@@ -286,15 +372,18 @@ export async function createRelative(
   userId: string,
   input: CreatePersonInput
 ): Promise<Person> {
-  const supabase = getSupabaseClient();
-  
-  // STEP 1: Upload photo to Supabase Storage if it's a local file URI
-  const photoUrl = await uploadPhotoIfLocal(
-    input.photoUrl,
-    STORAGE_BUCKETS.PERSON_PHOTOS,
-    `relatives/${userId}`,
-    'People API'
-  ); // Keep as null (not undefined) for createRelative
+  // STEP 1: Upload photo first (can retry independently)
+  let photoUrl: string | null = null;
+  try {
+    photoUrl = await preparePhotoForProfile(
+      input.photoUrl,
+      STORAGE_BUCKETS.PERSON_PHOTOS,
+      `relatives/${userId}`
+    ) ?? null; // Keep as null (not undefined) for createRelative
+  } catch (photoError) {
+    console.warn('[People API] Photo upload failed, continuing without photo:', photoError);
+    // Continue without photo rather than failing entirely
+  }
   
   // STEP 2: Prepare database row
   // NOTE: user_id is now DB-generated (gen_random_uuid()), not manually set
@@ -314,20 +403,10 @@ export async function createRelative(
     linked_auth_user_id: null, // Always null for new relatives (Ancestor/Shadow profiles)
   };
   
-  // STEP 4: Insert into database
-  // CRITICAL: .select() is required to get the new user_id back from the database
-  const { data, error } = await supabase
-    .from('people')
-    .insert(row)
-    .select() // This is important to get the new user_id back
-    .single();
+  // STEP 3: Create database record
+  const result = await createRelativeProfileRecord(userId, row);
   
-  const result = handleSupabaseMutation(data, error, {
-    apiName: 'People API',
-    operation: 'create relative',
-  });
-  
-  // STEP 5: Map database response to Person type using shared mapper
+  // STEP 4: Map database response to Person type using shared mapper
   return mapPersonRow(result, undefined, undefined, {
     blockedUserIds: new Set(),
     currentUserId: undefined,
@@ -364,17 +443,9 @@ export async function getAllPeople(currentUserId?: string): Promise<Person[]> {
   
   // STEP 1: Fetch blocked user IDs if currentUserId provided
   // These will be passed to the mapper to create placeholders
-  let blockedUserIds = new Set<string>();
-  if (currentUserId) {
-    const { data: blocks } = await supabase
-      .from('user_blocks')
-      .select('blocked_id')
-      .eq('blocker_id', currentUserId);
-    
-    if (blocks) {
-      blockedUserIds = new Set(blocks.map(b => b.blocked_id));
-    }
-  }
+  const blockedUserIds = currentUserId 
+    ? await getBlockedUserIds(currentUserId)
+    : new Set<string>();
   
   // STEP 2: Fetch ALL people and relationships in parallel
   // ⚠️ SECURITY: Blocked users ARE fetched but converted to placeholders by mapper

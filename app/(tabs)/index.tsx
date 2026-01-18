@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View, Platform, Alert, ScrollView, Dimensions, Share } from 'react-native';
+import { StyleSheet, View, Platform, Alert, ScrollView, Dimensions, Share, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useAuth } from '@/contexts/auth-context';
 import { createInvitationLink } from '@/services/supabase/invitations-api';
 import { useStatsigClient } from '@statsig/expo-bindings';
 import { logStatsigEvent } from '@/utils/statsig-tracking';
 import { HamburgerMenuButton } from '@/components/settings/SettingsHeader';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 import {
   PersonCard,
@@ -406,54 +408,90 @@ export default function HomeScreen() {
   return (
     <View style={[styles.wrapper, { backgroundColor, paddingTop: topInset }]}>
       <HamburgerMenuButton />
-      <InfiniteCanvas>
-        <ThemedView style={[styles.treeContainer, { paddingTop: contentPaddingTop }]}>
-          {/* Ancestor Generations (Above Ego) - Recursively display all parent generations */}
-          {ancestorGenerations.map((generation, index) => (
-            <View key={`ancestor-gen-${index}`} style={styles.generationSection}>
-              <GenerationRow 
-                people={generation}
-                blockedUserIds={blockedUserIds}
-                onPersonAddPress={handleAddPress}
-                onPersonPress={handlePersonPress}
-              />
-            </View>
-          ))}
+      <ErrorBoundary
+        fallback={(error) => (
+          <ThemedView style={styles.errorContainer}>
+            <MaterialIcons name="error-outline" size={64} color="#FF3B30" />
+            <ThemedText type="title" style={styles.errorTitle}>
+              Failed to Load Family Tree
+            </ThemedText>
+            <ThemedText style={styles.errorText}>{error.message}</ThemedText>
+            {__DEV__ && error.stack && (
+              <ThemedText style={styles.errorStack}>{error.stack}</ThemedText>
+            )}
+            <Pressable 
+              onPress={() => {
+                // Retry sync
+                if (userId) {
+                  useSessionStore.getState().syncFamilyTree(userId).catch((syncError) => {
+                    console.error('[HomeScreen] Error retrying sync:', syncError);
+                  });
+                }
+              }}
+              style={[styles.retryButton, { backgroundColor: colors.tint }]}
+            >
+              <ThemedText style={styles.retryButtonText}>Retry</ThemedText>
+            </Pressable>
+          </ThemedView>
+        )}
+        onReset={() => {
+          // Reset error boundary state
+          if (userId) {
+            useSessionStore.getState().syncFamilyTree(userId).catch((syncError) => {
+              console.error('[HomeScreen] Error retrying sync after reset:', syncError);
+            });
+          }
+        }}
+      >
+        <InfiniteCanvas>
+          <ThemedView style={[styles.treeContainer, { paddingTop: contentPaddingTop }]}>
+            {/* Ancestor Generations (Above Ego) - Recursively display all parent generations */}
+            {ancestorGenerations.map((generation, index) => (
+              <View key={`ancestor-gen-${index}`} style={styles.generationSection}>
+                <GenerationRow 
+                  people={generation}
+                  blockedUserIds={blockedUserIds}
+                  onPersonAddPress={handleAddPress}
+                  onPersonPress={handlePersonPress}
+                />
+              </View>
+            ))}
 
-          {/* Ego Row (Center) */}
-          <GenerationRow 
-            people={[]}
-            isEgo={true}
-            egoPerson={ego}
-            blockedUserIds={blockedUserIds}
-            onEgoPress={handleEgoCardPress}
-            onEgoAddPress={() => handleAddPress(ego)}
-            onPersonAddPress={handleAddPress}
-            onPersonPress={handlePersonPress}
-          />
+            {/* Ego Row (Center) */}
+            <GenerationRow 
+              people={[]}
+              isEgo={true}
+              egoPerson={ego}
+              blockedUserIds={blockedUserIds}
+              onEgoPress={handleEgoCardPress}
+              onEgoAddPress={() => handleAddPress(ego)}
+              onPersonAddPress={handleAddPress}
+              onPersonPress={handlePersonPress}
+            />
 
-          {/* Descendant Generations (Below Ego) - Recursively display all child generations */}
-          {descendantGenerations.map((generation, index) => (
-            <View key={`descendant-gen-${index}`} style={styles.generationSection}>
-              <GenerationRow 
-                people={generation}
-                blockedUserIds={blockedUserIds}
-                onPersonAddPress={handleAddPress}
-                onPersonPress={handlePersonPress}
-              />
-            </View>
-          ))}
+            {/* Descendant Generations (Below Ego) - Recursively display all child generations */}
+            {descendantGenerations.map((generation, index) => (
+              <View key={`descendant-gen-${index}`} style={styles.generationSection}>
+                <GenerationRow 
+                  people={generation}
+                  blockedUserIds={blockedUserIds}
+                  onPersonAddPress={handleAddPress}
+                  onPersonPress={handlePersonPress}
+                />
+              </View>
+            ))}
 
-          {/* Empty State */}
-          {ancestorGenerations.length === 0 && spouses.length === 0 && descendantGenerations.length === 0 && siblings.length === 0 && (
-            <View style={styles.emptyState}>
-              <ThemedText style={styles.emptyStateText}>
-                Tap the + button to add relatives to your family tree
-              </ThemedText>
-            </View>
-          )}
-        </ThemedView>
-      </InfiniteCanvas>
+            {/* Empty State */}
+            {ancestorGenerations.length === 0 && spouses.length === 0 && descendantGenerations.length === 0 && siblings.length === 0 && (
+              <View style={styles.emptyState}>
+                <ThemedText style={styles.emptyStateText}>
+                  Tap the + button to add relatives to your family tree
+                </ThemedText>
+              </View>
+            )}
+          </ThemedView>
+        </InfiniteCanvas>
+      </ErrorBoundary>
 
       {/* Add Relative or Story Modal */}
       {selectedPerson && (
@@ -584,5 +622,39 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     opacity: 0.6,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  errorTitle: {
+    marginTop: 16,
+    marginBottom: 8,
+    fontSize: 20,
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 24,
+    opacity: 0.7,
+  },
+  errorStack: {
+    fontSize: 12,
+    fontFamily: 'monospace',
+    marginBottom: 24,
+    opacity: 0.5,
+    textAlign: 'left',
+  },
+  retryButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

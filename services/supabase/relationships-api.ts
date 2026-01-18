@@ -57,29 +57,39 @@ export async function createRelationship(
   
   // STEP 1: Check if relationship already exists
   // Check both directions (person_one -> person_two and person_two -> person_one)
-  // For bidirectional relationships (spouse, sibling), check both directions
-  // For directional relationships (parent, child), check both directions too
+  // Since relationships can be stored in either order, we need to check both combinations
+  // Use a query that checks for exact match in both directions
   const { data: existingRelationships, error: checkError } = await supabase
     .from('relationships')
-    .select('id')
+    .select('*') // ✅ Get full records to check both person IDs
     .eq('relationship_type', input.relationshipType)
-    .or(`person_one_id.eq.${input.personOneId},person_one_id.eq.${input.personTwoId}`)
-    .or(`person_two_id.eq.${input.personTwoId},person_two_id.eq.${input.personOneId}`);
+    .or(`and(person_one_id.eq.${input.personOneId},person_two_id.eq.${input.personTwoId}),and(person_one_id.eq.${input.personTwoId},person_two_id.eq.${input.personOneId})`);
   
   if (checkError) {
     console.error('[Relationships API] Error checking existing relationships:', checkError);
     // Don't fail - continue with creation (might be a query issue)
   }
   
-  // Filter to find exact match (both person IDs match)
-  const exactMatch = existingRelationships?.find(rel => {
-    // We need to fetch the full relationship to check both person IDs
-    // For now, continue and let database handle duplicate key error
-    return false; // Simplified - let database handle duplicates
-  });
+  // Check if exact match exists (both person IDs match in either direction)
+  if (existingRelationships && existingRelationships.length > 0) {
+    // Find exact match (both person IDs match)
+    const exactMatch = existingRelationships.find(rel => {
+      // Check both directions: (one->two) or (two->one)
+      return (
+        (rel.person_one_id === input.personOneId && rel.person_two_id === input.personTwoId) ||
+        (rel.person_one_id === input.personTwoId && rel.person_two_id === input.personOneId)
+      );
+    });
+    
+    if (exactMatch) {
+      if (__DEV__) {
+        console.log('[Relationships API] Relationship already exists, returning existing:', exactMatch.id);
+      }
+      return exactMatch.id;
+    }
+  }
   
-  // Note: We'll let the database handle duplicate prevention via unique constraints
-  // If relationship exists, database will return error which we'll handle
+  // No exact match found - proceed with creation
   
   // STEP 2: Prepare database row
   const relationshipId = uuidv4();
@@ -132,12 +142,6 @@ export async function createRelationship(
     // Re-throw if not a duplicate key error
     throw err;
   }
-
-  if (__DEV__) {
-    console.log('[Relationships API] Relationship created:', { relationshipId: data.id, relationshipType: input.relationshipType });
-  }
-  
-  return data.id;
 }
 
 /**

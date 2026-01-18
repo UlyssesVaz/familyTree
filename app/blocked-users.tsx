@@ -20,6 +20,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { getBlockedUsersWithInfo, unblockUser } from '@/services/supabase/blocks-api';
 import { getUserProfile } from '@/services/supabase/people-api';
 import { usePeopleStore } from '@/stores/people-store';
+import type { Person } from '@/types/family-tree';
 import { useBlockedUsersStore } from '@/stores/blocked-users-store';
 import { useSessionStore } from '@/stores/session-store';
 import { useStatsigClient } from '@statsig/expo-bindings';
@@ -175,23 +176,48 @@ export default function BlockedUsersScreen() {
             }
             
             try {
-              // STEP 3: Sync with backend in background
+              // STEP 3: Sync with backend
               await unblockUser(session.user.id, userId);
               
-              // STEP 4: CRITICAL - Trigger a full sync to refetch updates from unblocked user
-              // This ensures their posts appear again in the feed immediately
-              // Don't await - let it happen in background
+              // STEP 4: CRITICAL - Wait for full sync to complete to ensure tree refreshes
+              // This ensures their posts appear again in the feed and tree layout updates
               const currentUserId = session.user.id;
-              useSessionStore.getState().syncFamilyTree(currentUserId).catch((syncError) => {
-                console.warn('[BlockedUsers] Background sync after unblock failed (non-fatal):', syncError);
-              });
+              try {
+                await useSessionStore.getState().syncFamilyTree(currentUserId);
+                
+                if (__DEV__) {
+                  console.log('[BlockedUsers] Sync completed after unblock');
+                }
+              } catch (syncError) {
+                console.warn('[BlockedUsers] Sync after unblock failed (non-fatal):', syncError);
+                // Continue - optimistic update is already done
+              }
               
               // Success - state already updated optimistically
               logStatsigEvent(statsigClient, 'user_unblocked', {
                 unblocked_user_id: userId,
               });
               
-              Alert.alert('User Unblocked', `${blockedUser.name} has been unblocked. Their content will now appear in your feed.`);
+              Alert.alert(
+                'User Unblocked', 
+                `${blockedUser.name} has been unblocked. Their content will now appear in your feed.`,
+                [
+                  {
+                    text: 'OK',
+                    onPress: () => {
+                      // Try to go back safely, or navigate to home if no previous screen
+                      try {
+                        // Check if we can go back by trying (expo-router doesn't have canGoBack)
+                        // Use replace to home tabs which will refresh the tree view
+                        router.replace('/(tabs)');
+                      } catch (navError) {
+                        // Fallback: just navigate to home
+                        router.replace('/(tabs)');
+                      }
+                    },
+                  },
+                ]
+              );
             } catch (error: any) {
               // REVERT: If backend fails, add back to blocked list
               useBlockedUsersStore.getState().addBlockedUser(userId);
