@@ -8,11 +8,15 @@
 import type { Person, Update } from '@/types/family-tree';
 
 /**
- * Filter out people who are blocked by the current user
+ * Mark blocked people as placeholders instead of removing them
  * 
- * @param people - Array of Person objects to filter
+ * This preserves relationships in the family tree structure.
+ * Blocked users are converted to placeholders with minimal data
+ * (name and relationships kept, photo/bio cleared).
+ * 
+ * @param people - Array of Person objects to process
  * @param blockedUserIds - Set of blocked auth user IDs (linkedAuthUserId values)
- * @returns Filtered array of Person objects
+ * @returns Array of Person objects with blocked users marked as placeholders
  */
 export function filterBlockedPeople(
   people: Person[],
@@ -22,14 +26,31 @@ export function filterBlockedPeople(
     return people;
   }
 
-  return people.filter((person) => {
-    // If person has no linked auth user (shadow profile), keep them
+  // Use .map() instead of .filter() to preserve relationships
+  // Mark blocked users as placeholders instead of removing them
+  return people.map((person) => {
+    // If person has no linked auth user (shadow profile), keep as-is
     if (!person.linkedAuthUserId) {
-      return true;
+      return person;
     }
 
-    // Filter out people whose linkedAuthUserId is in blockedUserIds
-    return !blockedUserIds.has(person.linkedAuthUserId);
+    // If person is blocked, convert to placeholder
+    if (blockedUserIds.has(person.linkedAuthUserId)) {
+      return {
+        ...person,
+        // Mark as placeholder so UI can show minimal info
+        isPlaceholder: true,
+        placeholderReason: 'blocked' as const,
+        // Clear sensitive data
+        photoUrl: undefined,
+        bio: undefined,
+        phoneNumber: undefined,
+        // Keep name and relationships for tree structure
+      };
+    }
+
+    // Person is not blocked, return as-is
+    return person;
   });
 }
 

@@ -11,6 +11,7 @@ export default function OnboardingLayout() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="welcome" />
       <Stack.Screen name="profile" />
+      <Stack.Screen name="birth-date" />
       <Stack.Screen name="location" />
     </Stack>
   );

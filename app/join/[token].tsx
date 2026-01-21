@@ -40,6 +40,7 @@ import {
 } from '@/services/supabase/invitations-api';
 import { useSyncFamilyTree, useEgo } from '@/hooks/use-session';
 import { usePeople } from '@/hooks/use-people';
+import { useSessionStore } from '@/stores/session-store';
 
 type ScreenState = 
   | 'loading'           // Initial load, validating token
@@ -145,12 +146,21 @@ export default function JoinScreen() {
       // This prevents race condition where navigation happens before cache is ready
       syncFamilyTreeMutation.mutate(session.user.id, {
         onSuccess: () => {
-          // React Query cache is now updated - navigate immediately
-          // No setTimeout needed - data is ready in cache
+          // React Query cache is now updated - check if claimed profile has birth date
+          // COPPA Compliance: Redirect to birth date collection if missing
+          const claimedProfile = useSessionStore.getState().getEgo();
+          
           if (__DEV__) {
-            console.log(`[JoinScreen] Sync completed, navigating to home`);
+            console.log(`[JoinScreen] Sync completed, checking for birthDate`);
           }
-          router.replace('/(tabs)');
+          
+          if (!claimedProfile?.birthDate) {
+            // No birth date - redirect to collect it (COPPA compliance)
+            router.replace('/(onboarding)/birth-date');
+          } else {
+            // Has birth date - go to tabs
+            router.replace('/(tabs)');
+          }
         },
         onError: (syncError: any) => {
           console.error('[JoinScreen] Error syncing after claim:', syncError);

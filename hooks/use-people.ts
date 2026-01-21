@@ -13,8 +13,9 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/auth-context';
-import { getAllPeople, createRelative } from '@/services/supabase/people-api';
+import { getAllPeople, createRelative, createEgoProfile } from '@/services/supabase/people-api';
 import type { Person } from '@/types/family-tree';
+import { useSessionStore } from '@/stores/session-store';
 
 export interface CreatePersonInput {
   name: string;
@@ -145,6 +146,52 @@ export function useAddPerson() {
       if (context.previousPeople) {
         queryClient.setQueryData(['people', userId], context.previousPeople);
       }
+    },
+  });
+}
+
+/**
+ * Mutation hook - creates an ego profile (user's own profile)
+ * 
+ * Used during onboarding when a user creates their first profile.
+ * Automatically updates React Query cache and Zustand store.
+ */
+export function useCreateEgoProfile() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (data: {
+      userId: string;
+      name: string;
+      birthDate: string;
+      gender?: Person['gender'];
+      photoUrl?: string;
+      bio?: string;
+      privacyPolicyAcceptedAt?: string;
+    }) => {
+      return await createEgoProfile(data.userId, {
+        name: data.name,
+        birthDate: data.birthDate,
+        gender: data.gender,
+        photoUrl: data.photoUrl,
+        bio: data.bio,
+        privacyPolicyAcceptedAt: data.privacyPolicyAcceptedAt,
+      });
+    },
+    
+    onSuccess: (createdPerson, variables) => {
+      // Automatically update React Query cache
+      queryClient.setQueryData<Person[]>(['people', variables.userId], (old = []) => {
+        // Check if ego already exists
+        const egoExists = old.some(p => p.id === createdPerson.id);
+        if (egoExists) {
+          return old.map(p => p.id === createdPerson.id ? createdPerson : p);
+        }
+        return [...old, createdPerson];
+      });
+      
+      // Update Zustand store for backward compatibility
+      useSessionStore.getState().loadEgo(createdPerson);
     },
   });
 }

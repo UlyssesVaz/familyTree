@@ -16,9 +16,9 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
-import { useSessionStore } from '@/stores/session-store';
 import { ProfileFormFields, ProfileFormData } from '@/components/family-tree/ProfileFormFields';
-import { createEgoProfile, COPPAViolationError } from '@/services/supabase/people-api';
+import { COPPAViolationError } from '@/services/supabase/people-api';
+import { useCreateEgoProfile } from '@/hooks/use-people';
 import { calculateAge, isAtLeast13 } from '@/utils/age-utils';
 import { isCOPPABlocked } from '@/utils/coppa-utils';
 
@@ -31,6 +31,7 @@ export default function ProfileSetupScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const userId = session?.user?.id;
+  const createEgoMutation = useCreateEgoProfile();
   const [formData, setFormData] = useState<ProfileFormData>({
     name: session?.user.name || '',
     bio: '',
@@ -111,9 +112,10 @@ export default function ProfileSetupScreen() {
       const privacyConsent = await AsyncStorage.getItem(PRIVACY_CONSENT_STORAGE_KEY);
       const privacyPolicyAcceptedAt = privacyConsent === 'true' ? new Date().toISOString() : undefined;
 
-      // Create ego profile in Supabase (atomic operation)
+      // Use React Query mutation (automatically handles cache update)
       // The API will check COPPA status again as a safety measure (RLS trigger)
-      const createdPerson = await createEgoProfile(userId, {
+      await createEgoMutation.mutateAsync({
+        userId,
         name: formData.name.trim(),
         birthDate: formData.birthDate, // Required - validated above
         gender: formData.gender,
@@ -121,12 +123,9 @@ export default function ProfileSetupScreen() {
         bio: formData.bio,
         privacyPolicyAcceptedAt, // Store privacy policy acceptance timestamp
       });
-
-      // Load the created person into Zustand store
-      useSessionStore.getState().loadEgo(createdPerson);
       
-
-      // Move to next step (only after successful 201 Created response)
+      // Cache is already updated by onSuccess callback in the mutation
+      // Navigate immediately - data is ready in React Query cache
       router.push('/(onboarding)/location');
     } catch (error: any) {
       console.error('[ProfileSetup] Error creating profile:', error);

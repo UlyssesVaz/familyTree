@@ -48,31 +48,35 @@ export default function AgeGateScreen() {
   useEffect(() => {
     const loadStoredStatus = async () => {
       try {
-        // If user is already authenticated, check if they have a redirect param
-        // Otherwise, skip age gate and let ProfileContext handle routing
-        if (session) {
-          if (params.redirect) {
-            router.replace(params.redirect as any);
-          } else {
-            router.replace('/(auth)/login');
-          }
-          return;
-        }
-
-        // Check if age gate already passed
+        // CRITICAL FIX: Check age gate status FIRST, before checking session
+        // This ensures authenticated users who haven't passed age gate still see the form
         const ageGatePassed = await AsyncStorage.getItem(AGE_GATE_STORAGE_KEY);
         const storedBirthDate = await AsyncStorage.getItem(BIRTH_DATE_STORAGE_KEY);
         const storedConsent = await AsyncStorage.getItem(PRIVACY_CONSENT_STORAGE_KEY);
 
         if (ageGatePassed === 'true' && storedBirthDate && storedConsent === 'true') {
-          // Age gate already passed - go to login (or redirect if provided)
-          if (params.redirect) {
-            router.replace(params.redirect as any);
+          // Age gate already passed - redirect based on session
+          if (session) {
+            // User is authenticated and age gate passed - go to redirect or tabs
+            if (params.redirect) {
+              router.replace(params.redirect as any);
+            } else {
+              router.replace('/(tabs)');
+            }
           } else {
-            router.replace('/(auth)/login');
+            // User not authenticated but age gate passed - go to login
+            if (params.redirect) {
+              router.replace(params.redirect as any);
+            } else {
+              router.replace('/(auth)/login');
+            }
           }
           return;
         }
+
+        // Age gate NOT passed - show the form (even if user is already signed in)
+        // This handles the case where an authenticated user clicks an invite link
+        // before passing age gate - they still need to complete it
 
         // Restore state if available
         if (storedBirthDate) {
@@ -330,6 +334,28 @@ const styles = StyleSheet.create({
   },
   ageSection: {
     marginBottom: 24,
+  },
+  label: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 16,
+  },
+  yearGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  yearButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  yearButtonText: {
+    fontSize: 16,
   },
   statusBox: {
     flexDirection: 'row',

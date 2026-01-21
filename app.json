@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "FamilyTreeApp",
-    "slug": "FamilyTreeApp",
+    "name": "AddMyFamilyTree",
+    "slug": "AddMyFamilyTree",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/icon.jpg",
     "scheme": "familytreeapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
