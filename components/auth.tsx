@@ -180,56 +180,32 @@ export function AppleSignInButton({
   
   // Check if Apple Sign-In is available (iOS 13+)
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:182',message:'Apple Sign-In availability check starting',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     if (Platform.OS === 'ios') {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:185',message:'Platform is iOS, checking availability',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       AppleAuthentication.isAvailableAsync()
         .then((available) => {
-          // #region agent log
-          fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:188',message:'Apple availability check result',data:{available,platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
           if (__DEV__) {
             console.log('[AppleSignIn] Availability check:', available);
           }
           setIsAppleAvailable(available);
         })
         .catch((error) => {
-          // #region agent log
-          fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:193',message:'Apple availability check error',data:{error:error?.message||String(error),platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
           console.error('[AppleSignIn] Error checking availability:', error);
           setIsAppleAvailable(false);
         })
         .finally(() => {
-          // #region agent log
-          fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:197',message:'Apple availability check completed',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-          // #endregion
           setIsChecking(false);
         });
     } else {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:200',message:'Not iOS platform, skipping check',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       // Not iOS, skip check
       setIsChecking(false);
     }
   }, []);
   
   const handleAppleSignIn = async () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:222',message:'Apple Sign-In button pressed',data:{isLoading,disabled},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
     if (isLoading || disabled) return;
     
     setIsLoading(true);
     try {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:228',message:'Calling AppleAuthentication.signInAsync',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
       // Request Apple authentication
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
@@ -237,10 +213,6 @@ export function AppleSignInButton({
           AppleAuthentication.AppleAuthenticationScope.EMAIL,
         ],
       });
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:237',message:'Apple sign-in credential received',data:{hasIdentityToken:!!credential.identityToken,hasEmail:!!credential.email,user:credential.user},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
       
       if (!credential.identityToken) {
         throw new Error('No identity token received from Apple');
@@ -250,16 +222,9 @@ export function AppleSignInButton({
         console.log('[AppleSignIn] Got identity token, signing in to Supabase...');
       }
       
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:245',message:'Calling authService.signInWithIdToken',data:{provider:'apple'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
       // Sign in to Supabase with Apple ID token (same pattern as Google)
       const authService = getAuthService();
       await authService.signInWithIdToken('apple', credential.identityToken);
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:249',message:'Apple Sign-In successful',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
       
       if (__DEV__) {
         console.log('[AppleSignIn] Successfully authenticated');
@@ -267,9 +232,6 @@ export function AppleSignInButton({
       
       onSignInSuccess?.();
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:252',message:'Apple Sign-In error',data:{error:error?.message||String(error),code:error?.code},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
       console.error('[AppleSignIn] Error:', error);
       
       // Handle Apple-specific errors (per Expo docs: ERR_REQUEST_CANCELED)
@@ -288,18 +250,12 @@ export function AppleSignInButton({
   
   // Don't render while checking or if not available or not iOS
   if (isChecking) {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:252',message:'Still checking availability, returning null',data:{isChecking,isAppleAvailable,platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     // Wait for availability check to complete
     return null;
   }
   
   // Don't render on Android or if Apple Sign-In is not available
   if (!isAppleAvailable || Platform.OS !== 'ios') {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:258',message:'Not rendering Apple button - conditions not met',data:{isAppleAvailable,platform:Platform.OS,isChecking},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     if (__DEV__) {
       console.log('[AppleSignIn] Not rendering button:', { 
         isAppleAvailable, 
@@ -308,10 +264,6 @@ export function AppleSignInButton({
     }
     return null;
   }
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.tsx:268',message:'Rendering Apple Sign-In button',data:{isAppleAvailable,platform:Platform.OS,isChecking},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
   
   // iOS native button (REQUIRED for App Store)
   return (

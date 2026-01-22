@@ -3,9 +3,12 @@
  * 
  * Simple login screen with native Google Sign-In button.
  * Uses @react-native-google-signin/google-signin for native Google Sign-In experience.
+ * 
+ * Hidden demo login: Tap the title "Welcome to Family Tree" 5 times quickly to access.
  */
 
-import { StyleSheet, View, Platform } from 'react-native';
+import { useState, useRef, useEffect } from 'react';
+import { StyleSheet, View, Platform, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -15,6 +18,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuth } from '@/contexts/auth-context';
 import GoogleSignInButton, { AppleSignInButton } from '@/components/auth';
+import { DemoLoginModal } from '@/components/DemoLoginModal';
 
 export default function LoginScreen() {
   const colorScheme = useColorScheme();
@@ -24,9 +28,58 @@ export default function LoginScreen() {
   const { isLoading } = useAuth();
   const insets = useSafeAreaInsets();
   
+  // Demo login modal state
+  const [showDemoLogin, setShowDemoLogin] = useState(false);
+  
+  // Secret tap sequence state (race condition safe)
+  const tapCountRef = useRef(0);
+  const lastTapTimeRef = useRef(0);
+  const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // iOS best practice: Safe area top inset + additional padding
   const topPadding = Platform.OS === 'ios' ? Math.max(insets.top, 44) + 20 : insets.top + 20;
   const bottomPadding = Math.max(insets.bottom, 20);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (resetTimeoutRef.current) {
+        clearTimeout(resetTimeoutRef.current);
+        resetTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  // Secret tap sequence: Tap the title 5 times quickly to show demo login
+  const handleTitlePress = () => {
+    const now = Date.now();
+    const timeSinceLastTap = now - lastTapTimeRef.current;
+
+    // Clear existing timeout
+    if (resetTimeoutRef.current) {
+      clearTimeout(resetTimeoutRef.current);
+    }
+
+    // Reset if more than 2 seconds between taps
+    if (timeSinceLastTap > 2000) {
+      tapCountRef.current = 0;
+    }
+
+    tapCountRef.current += 1;
+    lastTapTimeRef.current = now;
+
+    // Show demo login after 5 taps
+    if (tapCountRef.current >= 5) {
+      setShowDemoLogin(true);
+      tapCountRef.current = 0; // Reset
+    } else {
+      // Set timeout to reset tap count if no more taps within 2 seconds
+      resetTimeoutRef.current = setTimeout(() => {
+        tapCountRef.current = 0;
+        resetTimeoutRef.current = null;
+      }, 2000);
+    }
+  };
 
   // Callback when Google sign-in succeeds
   // The auth context will automatically detect the session change via onAuthStateChanged
@@ -48,9 +101,11 @@ export default function LoginScreen() {
       <View style={styles.content}>
         {/* Header */}
         <View style={styles.header}>
-          <ThemedText type="title" style={styles.title}>
-            Welcome to Family Tree
-          </ThemedText>
+          <Pressable onPress={handleTitlePress}>
+            <ThemedText type="title" style={styles.title}>
+              Welcome to Family Tree
+            </ThemedText>
+          </Pressable>
           <ThemedText style={[styles.subtitle, { color: colors.icon }]}>
             Sign in to get started
           </ThemedText>
@@ -61,9 +116,6 @@ export default function LoginScreen() {
           {/* Apple Sign-In (REQUIRED for App Store) - Show first on iOS */}
           {Platform.OS === 'ios' && (
             <View style={styles.signInButton}>
-              {/* #region agent log */}
-              {(() => { fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:62',message:'Rendering AppleSignInButton in login screen',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{}); return null; })()}
-              {/* #endregion */}
               <AppleSignInButton onSignInSuccess={handleSignInSuccess} />
             </View>
           )}
@@ -93,6 +145,12 @@ export default function LoginScreen() {
         </View>
       </View>
       <View style={[styles.bottomSpacer, { height: bottomPadding }]} />
+      
+      {/* Demo Login Modal (hidden, only accessible via secret tap) */}
+      <DemoLoginModal
+        visible={showDemoLogin}
+        onClose={() => setShowDemoLogin(false)}
+      />
     </ThemedView>
   );
 }

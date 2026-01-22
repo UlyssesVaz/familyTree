@@ -14,7 +14,7 @@
 import { AuthService, AuthSession, AuthProvider, User, AuthError } from './types';
 import { getSupabaseClient } from '../supabase/supabase-init';
 import * as Linking from 'expo-linking';
-import { isAppleReviewerEmail } from '@/utils/apple-reviewer-backdoor';
+import { isAppleReviewerEmail, isEmailPasswordAllowed } from '@/utils/apple-reviewer-backdoor';
 
 export class SupabaseAuthService implements AuthService {
   private supabase: ReturnType<typeof getSupabaseClient> | null = null;
@@ -157,19 +157,98 @@ export class SupabaseAuthService implements AuthService {
   }
 
   async signInWithEmail(email: string, password: string): Promise<AuthSession> {
-    // Email/password authentication is not supported - Google SSO only
-    throw {
-      code: 'not_supported',
-      message: 'Email/password authentication is not available. Please use Google SSO.',
-    } as AuthError;
+    // Only allow email/password for demo accounts (Apple reviewer)
+    if (!isEmailPasswordAllowed(email)) {
+      throw {
+        code: 'not_supported',
+        message: 'Email/password authentication is not available. Please use Google or Apple Sign-In.',
+      } as AuthError;
+    }
+
+    try {
+      const supabase = this.getSupabase();
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        console.error('[SupabaseAuth] signInWithEmail error:', error);
+        throw error;
+      }
+
+      if (!data.session) {
+        throw {
+          code: 'no_session',
+          message: 'Sign-in succeeded but no session was returned',
+          provider: 'email',
+        } as AuthError;
+      }
+
+      // Apple Reviewer Backdoor: Log demo account access
+      if (isAppleReviewerEmail(data.session.user?.email)) {
+        console.log('[SupabaseAuth] Apple reviewer demo account: Allowing access for', data.session.user?.email);
+      }
+
+      return this.supabaseSessionToAuthSession(data.session);
+    } catch (error: any) {
+      // If it's already an AuthError, rethrow it
+      if (error.code && error.message) {
+        throw error;
+      }
+      // Otherwise, wrap it
+      throw this.handleError(error, 'email');
+    }
   }
 
   async signUpWithEmail(email: string, password: string, name?: string): Promise<AuthSession> {
-    // Email/password authentication is not supported - Google SSO only
-    throw {
-      code: 'not_supported',
-      message: 'Email/password authentication is not available. Please use Google SSO.',
-    } as AuthError;
+    // Only allow sign-up for demo accounts (Apple reviewer)
+    if (!isEmailPasswordAllowed(email)) {
+      throw {
+        code: 'not_supported',
+        message: 'Email/password sign-up is not available. Please use Google or Apple Sign-In.',
+      } as AuthError;
+    }
+
+    try {
+      const supabase = this.getSupabase();
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            name: name || email.split('@')[0],
+          },
+        },
+      });
+
+      if (error) {
+        console.error('[SupabaseAuth] signUpWithEmail error:', error);
+        throw error;
+      }
+
+      if (!data.session) {
+        throw {
+          code: 'no_session',
+          message: 'Sign-up succeeded but no session was returned',
+          provider: 'email',
+        } as AuthError;
+      }
+
+      // Apple Reviewer Backdoor: Log demo account creation
+      if (isAppleReviewerEmail(data.session.user?.email)) {
+        console.log('[SupabaseAuth] Apple reviewer demo account created:', data.session.user?.email);
+      }
+
+      return this.supabaseSessionToAuthSession(data.session);
+    } catch (error: any) {
+      // If it's already an AuthError, rethrow it
+      if (error.code && error.message) {
+        throw error;
+      }
+      // Otherwise, wrap it
+      throw this.handleError(error, 'email');
+    }
   }
 
   async signOut(): Promise<void> {
