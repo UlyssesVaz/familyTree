@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "AddMyFamilyTree",
-    "slug": "AddMyFamilyTree",
+    "slug": "FamilyTreeApp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.jpg",
@@ -12,6 +12,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.vaz09.FamilyTreeApp",
       "googleServicesFile": "./GoogleService-Info.plist",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "We need access to your camera to take photos for family tree profiles and updates.",

@@ -14,6 +14,7 @@
 import { AuthService, AuthSession, AuthProvider, User, AuthError } from './types';
 import { getSupabaseClient } from '../supabase/supabase-init';
 import * as Linking from 'expo-linking';
+import { isAppleReviewerEmail } from '@/utils/apple-reviewer-backdoor';
 
 export class SupabaseAuthService implements AuthService {
   private supabase: ReturnType<typeof getSupabaseClient> | null = null;
@@ -135,6 +136,13 @@ export class SupabaseAuthService implements AuthService {
           message: 'Sign-in succeeded but no session was returned',
           provider: 'google',
         } as AuthError;
+      }
+
+      // Apple Reviewer Backdoor: Check if this is the Apple reviewer email
+      const userEmail = data.session.user?.email;
+      if (isAppleReviewerEmail(userEmail)) {
+        console.log('[SupabaseAuth] Apple reviewer backdoor: Allowing access for', userEmail);
+        // Reviewer email is whitelisted - proceed with normal authentication
       }
 
       return this.supabaseSessionToAuthSession(data.session);

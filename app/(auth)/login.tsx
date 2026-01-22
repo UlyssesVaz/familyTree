@@ -61,6 +61,9 @@ export default function LoginScreen() {
           {/* Apple Sign-In (REQUIRED for App Store) - Show first on iOS */}
           {Platform.OS === 'ios' && (
             <View style={styles.signInButton}>
+              {/* #region agent log */}
+              {(() => { fetch('http://127.0.0.1:7244/ingest/f336e8f0-8f7a-40aa-8f54-32371722b5de',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:62',message:'Rendering AppleSignInButton in login screen',data:{platform:Platform.OS},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{}); return null; })()}
+              {/* #endregion */}
               <AppleSignInButton onSignInSuccess={handleSignInSuccess} />
             </View>
           )}
