@@ -8,9 +8,10 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { StyleSheet, View, Platform, Pressable } from 'react-native';
+import { StyleSheet, View, Platform, Pressable, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -30,6 +31,9 @@ export default function LoginScreen() {
   
   // Demo login modal state
   const [showDemoLogin, setShowDemoLogin] = useState(false);
+  
+  // Terms acceptance state
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   
   // Secret tap sequence state (race condition safe)
   const tapCountRef = useRef(0);
@@ -95,6 +99,15 @@ export default function LoginScreen() {
     // Error handling is done in the GoogleSignInButton component
   };
 
+  // Wrapper for Apple Sign-In to check terms
+  const handleAppleSignInWrapper = () => {
+    if (!hasAcceptedTerms) {
+      Alert.alert('Terms Required', 'Please accept the Terms of Service and Privacy Policy to continue.');
+      return;
+    }
+    // Terms accepted, proceed with sign-in (handled by AppleSignInButton)
+  };
+
   return (
     <ThemedView style={styles.container}>
       <View style={[styles.topSpacer, { height: topPadding }]} />
@@ -116,7 +129,18 @@ export default function LoginScreen() {
           {/* Apple Sign-In (REQUIRED for App Store) - Show first on iOS */}
           {Platform.OS === 'ios' && (
             <View style={styles.signInButton}>
-              <AppleSignInButton onSignInSuccess={handleSignInSuccess} />
+              <AppleSignInButton 
+                onSignInSuccess={handleSignInSuccess}
+                disabled={!hasAcceptedTerms}
+              />
+              {!hasAcceptedTerms && (
+                <View style={styles.disabledOverlay} pointerEvents="box-only">
+                  <Pressable 
+                    style={StyleSheet.absoluteFill} 
+                    onPress={() => Alert.alert('Terms Required', 'Please accept the Terms of Service and Privacy Policy to continue.')}
+                  />
+                </View>
+              )}
             </View>
           )}
           
@@ -125,22 +149,77 @@ export default function LoginScreen() {
             <GoogleSignInButton
               onSignInSuccess={handleSignInSuccess}
               onSignInError={handleSignInError}
-              disabled={isLoading}
+              disabled={isLoading || !hasAcceptedTerms}
             />
           </View>
           
           {/* Apple Sign-In (fallback for web/Android) - Show after Google */}
           {Platform.OS !== 'ios' && (
             <View style={styles.signInButton}>
-              <AppleSignInButton onSignInSuccess={handleSignInSuccess} />
+              <AppleSignInButton 
+                onSignInSuccess={handleSignInSuccess}
+                disabled={!hasAcceptedTerms}
+              />
+              {!hasAcceptedTerms && (
+                <View style={styles.disabledOverlay} pointerEvents="box-only">
+                  <Pressable 
+                    style={StyleSheet.absoluteFill} 
+                    onPress={() => Alert.alert('Terms Required', 'Please accept the Terms of Service and Privacy Policy to continue.')}
+                  />
+                </View>
+              )}
             </View>
           )}
+        </View>
+
+        {/* Terms Acceptance Checkbox */}
+        <View style={styles.termsSection}>
+          <Pressable
+            onPress={() => setHasAcceptedTerms(!hasAcceptedTerms)}
+            style={styles.termsCheckbox}
+          >
+            <View
+              style={[
+                styles.checkbox,
+                {
+                  backgroundColor: hasAcceptedTerms ? colors.tint : 'transparent',
+                  borderColor: hasAcceptedTerms ? colors.tint : colors.icon,
+                },
+              ]}
+            >
+              {hasAcceptedTerms && (
+                <MaterialIcons name="check" size={18} color="#FFFFFF" />
+              )}
+            </View>
+            <ThemedText style={[styles.termsText, { color: colors.text }]}>
+              I agree to the{' '}
+              <ThemedText
+                style={[styles.linkText, { color: colors.tint }]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  router.push('/privacy-policy');
+                }}
+              >
+                Privacy Policy
+              </ThemedText>
+              {' '}and{' '}
+              <ThemedText
+                style={[styles.linkText, { color: colors.tint }]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  router.push('/terms-of-use');
+                }}
+              >
+                Terms of Service
+              </ThemedText>
+            </ThemedText>
+          </Pressable>
         </View>
 
         {/* Footer */}
         <View style={styles.footer}>
           <ThemedText style={[styles.footerText, { color: colors.icon }]}>
-            By continuing, you agree to our Terms of Service and Privacy Policy
+            By continuing, you confirm that you are at least 13 years old
           </ThemedText>
         </View>
       </View>
@@ -185,7 +264,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   ssoSection: {
-    marginBottom: 32,
+    marginBottom: 24,
     width: '100%',
     alignItems: 'center',
     gap: 12,
@@ -193,6 +272,40 @@ const styles = StyleSheet.create({
   signInButton: {
     width: '100%',
     alignItems: 'center',
+    position: 'relative',
+  },
+  disabledOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
+  termsSection: {
+    marginBottom: 20,
+    width: '100%',
+  },
+  termsCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+    flexShrink: 0,
+  },
+  termsText: {
+    fontSize: 14,
+    lineHeight: 20,
+    flex: 1,
+  },
+  linkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
   footer: {
     marginTop: 'auto',

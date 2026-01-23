@@ -19,7 +19,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -67,6 +67,7 @@ export default function JoinScreen() {
   const [screenState, setScreenState] = useState<ScreenState>('loading');
   const [invitation, setInvitation] = useState<InvitationDetails | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   const hasAttemptedClaimRef = useRef(false); // Prevent double-claiming
 
   // Pre-auth validation using validateInvitationToken + age gate check
@@ -127,6 +128,15 @@ export default function JoinScreen() {
   const handleClaimProfile = useCallback(async () => {
     if (!token || !invitation || !session?.user?.id) return;
     if (hasAttemptedClaimRef.current) return; // Prevent double-claiming
+    
+    // Check terms acceptance before claiming
+    if (!hasAcceptedTerms) {
+      Alert.alert(
+        'Terms Required',
+        'Please accept the Terms of Service and Privacy Policy to continue.'
+      );
+      return;
+    }
 
     hasAttemptedClaimRef.current = true;
     setScreenState('claiming');
@@ -226,12 +236,13 @@ export default function JoinScreen() {
   };
 
   // Watch for session changes (after sign-in) - automatically claim profile
+  // Only auto-claim if terms are accepted (prevents race condition)
   useEffect(() => {
-    if (session?.user?.id && invitation && screenState === 'ready' && !hasAttemptedClaimRef.current) {
-      // User just signed in, now claim the profile automatically
+    if (session?.user?.id && invitation && screenState === 'ready' && !hasAttemptedClaimRef.current && hasAcceptedTerms) {
+      // User just signed in and accepted terms, now claim the profile automatically
       handleClaimProfile();
     }
-  }, [session?.user?.id, invitation, screenState, handleClaimProfile]);
+  }, [session?.user?.id, invitation, screenState, hasAcceptedTerms, handleClaimProfile]);
 
   // Loading state
   if (screenState === 'loading') {
@@ -320,6 +331,50 @@ export default function JoinScreen() {
         </View>
       )}
 
+      {/* Terms Acceptance Checkbox */}
+      <View style={styles.termsSection}>
+        <Pressable
+          onPress={() => setHasAcceptedTerms(!hasAcceptedTerms)}
+          style={styles.termsCheckbox}
+        >
+          <View
+            style={[
+              styles.checkbox,
+              {
+                backgroundColor: hasAcceptedTerms ? colors.tint : 'transparent',
+                borderColor: hasAcceptedTerms ? colors.tint : colors.icon,
+              },
+            ]}
+          >
+            {hasAcceptedTerms && (
+              <MaterialIcons name="check" size={18} color="#FFFFFF" />
+            )}
+          </View>
+          <ThemedText style={[styles.termsText, { color: colors.text }]}>
+            I agree to the{' '}
+            <ThemedText
+              style={[styles.linkText, { color: colors.tint }]}
+              onPress={(e) => {
+                e.stopPropagation();
+                router.push('/privacy-policy');
+              }}
+            >
+              Privacy Policy
+            </ThemedText>
+            {' '}and{' '}
+            <ThemedText
+              style={[styles.linkText, { color: colors.tint }]}
+              onPress={(e) => {
+                e.stopPropagation();
+                router.push('/terms-of-use');
+              }}
+            >
+              Terms of Service
+            </ThemedText>
+          </ThemedText>
+        </Pressable>
+      </View>
+
       <View style={styles.buttonContainer}>
         {!session?.user?.id ? (
           // Show Google Sign-In button if not authenticated
@@ -329,6 +384,7 @@ export default function JoinScreen() {
                 // Sign-in success is handled by useEffect watching session
                 setScreenState('ready');
               }}
+              disabled={!hasAcceptedTerms}
             />
             {screenState === 'signing_in' && (
               <View style={styles.signingInContainer}>
@@ -340,13 +396,22 @@ export default function JoinScreen() {
         ) : (
           // Show Accept button if already authenticated
           <Pressable
-            onPress={handleClaimProfile}
-            disabled={screenState === 'claiming'}
+            onPress={() => {
+              if (!hasAcceptedTerms) {
+                Alert.alert(
+                  'Terms Required',
+                  'Please accept the Terms of Service and Privacy Policy to continue.'
+                );
+                return;
+              }
+              handleClaimProfile();
+            }}
+            disabled={screenState === 'claiming' || !hasAcceptedTerms}
             style={[
               styles.button,
               styles.primaryButton,
               { backgroundColor: colors.tint },
-              screenState === 'claiming' && styles.buttonDisabled,
+              (screenState === 'claiming' || !hasAcceptedTerms) && styles.buttonDisabled,
             ]}
           >
             {screenState === 'claiming' ? (
@@ -437,6 +502,35 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     flex: 1,
+  },
+  termsSection: {
+    marginBottom: 20,
+    width: '100%',
+  },
+  termsCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+    flexShrink: 0,
+  },
+  termsText: {
+    fontSize: 14,
+    lineHeight: 20,
+    flex: 1,
+  },
+  linkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
   buttonContainer: {
     width: '100%',

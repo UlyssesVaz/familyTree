@@ -267,12 +267,12 @@ export function AppleSignInButton({
   
   // iOS native button (REQUIRED for App Store)
   return (
-    <View style={isLoading && { opacity: 0.5 }}>
+    <View style={[styles.appleButtonContainer, isLoading && { opacity: 0.5 }]}>
       <AppleAuthentication.AppleAuthenticationButton
         buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
         buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
         cornerRadius={8}
-        style={{ width: '100%', height: 50 }}
+        style={styles.appleNativeButton}
         onPress={isLoading ? () => {} : handleAppleSignIn}
       />
     </View>
@@ -310,6 +310,14 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '500',
+  },
+  appleButtonContainer: {
+    width: '100%',
+    alignSelf: 'stretch',
+  },
+  appleNativeButton: {
+    width: '100%',
+    height: 50,
   },
   buttonDisabled: {
     opacity: 0.5,
